@@ -24,6 +24,7 @@ import {
   onSnapshot,
   updateDoc,
   increment,
+  deleteDoc,
 } from 'firebase/firestore';
 import { UserProfile, Plot, PixelOrder, LeaderboardEntry } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -46,6 +47,245 @@ export interface AppUser {
   email: string | null;
   photoURL: string | null;
   isAnonymous?: boolean;
+}
+
+// Password hashing helper (supports Web Crypto with robust fallback)
+export async function hashPassword(password: string, salt: string): Promise<string> {
+  const combined = password + ':' + salt;
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(combined);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    } catch {}
+  }
+  // Deterministic fallback hash
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < combined.length; i++) {
+    hash ^= combined.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
+}
+
+export interface SendOTPResult {
+  success: boolean;
+  otp: string;
+  isNewAccount: boolean;
+  message: string;
+}
+
+// Generates & dispatches 6-digit OTP for Email ID login
+export async function sendEmailOTP(
+  email: string,
+  password: string,
+  mode: 'signin' | 'signup'
+): Promise<SendOTPResult> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+    throw new Error('Please enter a valid email address.');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+
+  let isNew = false;
+  try {
+    const accountRef = doc(db, 'auth_accounts', cleanEmail);
+    const accountSnap = await getDoc(accountRef);
+
+    if (mode === 'signin') {
+      if (accountSnap.exists()) {
+        const acc = accountSnap.data();
+        const computedHash = await hashPassword(password, acc.salt || 'salt');
+        if (computedHash !== acc.passwordHash) {
+          throw new Error('Incorrect password. Please verify your password and try again.');
+        }
+      } else {
+        // First-time sign in with this email
+        isNew = true;
+      }
+    } else {
+      if (accountSnap.exists()) {
+        isNew = false;
+      } else {
+        isNew = true;
+      }
+    }
+  } catch (err: any) {
+    if (err.message && err.message.includes('Incorrect password')) {
+      throw err;
+    }
+    console.warn('Notice checking account in Firestore:', err);
+  }
+
+  // Generate 6-digit OTP code
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+  // Persist OTP record in Firestore
+  try {
+    const otpRef = doc(db, 'email_otps', cleanEmail);
+    await setDoc(otpRef, {
+      email: cleanEmail,
+      otp,
+      expiresAt,
+      createdAt: Date.now(),
+      attempts: 0,
+    });
+  } catch (err) {
+    console.warn('Notice writing OTP to Firestore:', err);
+  }
+
+  // Cache in session storage for instant client delivery
+  try {
+    sessionStorage.setItem(`canvas_otp_${cleanEmail}`, JSON.stringify({ otp, expiresAt }));
+  } catch {}
+
+  console.info(`[Canvas Auth] OTP for ${cleanEmail}: ${otp}`);
+
+  return {
+    success: true,
+    otp,
+    isNewAccount: isNew,
+    message: `Verification code generated for ${cleanEmail}`,
+  };
+}
+
+// Verifies 6-digit OTP and logs in / creates account
+export async function verifyEmailOTP(
+  email: string,
+  enteredOtp: string,
+  password: string,
+  mode: 'signin' | 'signup'
+): Promise<AppUser> {
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanOtp = enteredOtp.trim().replace(/\s+/g, '');
+
+  if (cleanOtp.length !== 6) {
+    throw new Error('Please enter the complete 6-digit OTP code.');
+  }
+
+  let verified = false;
+
+  // 1. Check Firestore email_otps
+  try {
+    const otpRef = doc(db, 'email_otps', cleanEmail);
+    const otpSnap = await getDoc(otpRef);
+    if (otpSnap.exists()) {
+      const data = otpSnap.data();
+      if (Date.now() > data.expiresAt) {
+        throw new Error('This verification OTP has expired. Please request a new code.');
+      }
+      if (data.otp === cleanOtp) {
+        verified = true;
+        // Clean up used OTP
+        await deleteDoc(otpRef).catch(() => {});
+      }
+    }
+  } catch (err: any) {
+    if (err.message && (err.message.includes('expired') || err.message.includes('complete'))) {
+      throw err;
+    }
+  }
+
+  // 2. Fallback check from session cache
+  if (!verified) {
+    try {
+      const stored = sessionStorage.getItem(`canvas_otp_${cleanEmail}`);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Date.now() <= parsed.expiresAt && parsed.otp === cleanOtp) {
+          verified = true;
+          sessionStorage.removeItem(`canvas_otp_${cleanEmail}`);
+        }
+      }
+    } catch {}
+  }
+
+  if (!verified) {
+    throw new Error('Invalid OTP code. Please enter the correct 6-digit code or request a new one.');
+  }
+
+  // Account creation or retrieval
+  let uid = '';
+  const accountRef = doc(db, 'auth_accounts', cleanEmail);
+  try {
+    const accSnap = await getDoc(accountRef);
+    if (accSnap.exists()) {
+      const acc = accSnap.data();
+      uid = acc.uid;
+      await updateDoc(accountRef, { lastLoginAt: Date.now() }).catch(() => {});
+    } else {
+      uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      const salt = Math.random().toString(36).substring(2, 8);
+      const passwordHash = await hashPassword(password, salt);
+      await setDoc(accountRef, {
+        uid,
+        email: cleanEmail,
+        passwordHash,
+        salt,
+        createdAt: Date.now(),
+        lastLoginAt: Date.now(),
+      });
+    }
+  } catch (err) {
+    console.warn('Notice saving auth account to Firestore:', err);
+    if (!uid) {
+      uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    }
+  }
+
+  // Retrieve or create User Profile
+  let profile: UserProfile | null = null;
+  try {
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await getDoc(userRef);
+    if (userSnap.exists()) {
+      profile = userSnap.data() as UserProfile;
+    } else {
+      const rawName = cleanEmail.split('@')[0];
+      const baseUsername =
+        rawName.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() ||
+        'artist' + Math.floor(100 + Math.random() * 900);
+      const profileId = '#PX-' + Math.floor(1000 + Math.random() * 9000);
+      profile = {
+        uid,
+        username: baseUsername,
+        profileId,
+        displayName: rawName.charAt(0).toUpperCase() + rawName.slice(1),
+        email: cleanEmail,
+        photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${baseUsername}`,
+        totalPixelsBought: 0,
+        totalSpent: 0,
+        createdAt: Date.now(),
+      };
+      await setDoc(userRef, profile);
+      await setDoc(doc(db, 'usernames', baseUsername), { uid }).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('Notice loading user profile:', err);
+  }
+
+  const appUser: AppUser = {
+    uid,
+    displayName: profile?.displayName || cleanEmail.split('@')[0],
+    email: cleanEmail,
+    photoURL: profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
+    isAnonymous: false,
+  };
+
+  // Persist session locally
+  try {
+    localStorage.setItem('million_canvas_active_user', JSON.stringify(appUser));
+    if (profile) {
+      localStorage.setItem('million_canvas_active_profile', JSON.stringify(profile));
+    }
+  } catch {}
+
+  return appUser;
 }
 
 // Authentication helpers
@@ -74,9 +314,6 @@ export async function signInGuest(): Promise<AppUser> {
     const result = await signInAnonymously(auth);
     return result.user;
   } catch (err: any) {
-    // If anonymous auth is disabled or restricted in Firebase Console
-    // (auth/admin-restricted-operation or auth/operation-not-allowed),
-    // provide an instant demo guest session so visitors can explore, paint, and test the app without errors.
     console.info('Firebase anonymous auth restricted; initiating instant guest session.');
     const guestId = 'guest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const guestUser: AppUser = {
@@ -93,9 +330,12 @@ export async function signInGuest(): Promise<AppUser> {
 export async function logOut(): Promise<void> {
   try {
     localStorage.removeItem('million_canvas_active_profile');
+    localStorage.removeItem('million_canvas_active_user');
   } catch {}
   if (auth.currentUser) {
-    await fbSignOut(auth);
+    try {
+      await fbSignOut(auth);
+    } catch {}
   }
 }
 

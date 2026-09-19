@@ -108,8 +108,20 @@ export default function App() {
     });
   }, []);
 
-  // Listen to Firebase Auth state
+  // Listen to Auth state (Firebase Auth & Email OTP sessions)
   useEffect(() => {
+    // Initial check for active Email OTP session
+    try {
+      const storedUser = localStorage.getItem('million_canvas_active_user');
+      if (storedUser) {
+        const parsed = JSON.parse(storedUser);
+        setRawUser(parsed);
+        getUserProfile(parsed.uid).then((p) => {
+          if (p) setUserProfile(p);
+        });
+      }
+    } catch {}
+
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
         setRawUser(fbUser);
@@ -127,6 +139,20 @@ export default function App() {
           setShowOnboarding(true);
         }
       } else {
+        // Check for Email OTP session
+        try {
+          const storedUser = localStorage.getItem('million_canvas_active_user');
+          if (storedUser) {
+            const parsed = JSON.parse(storedUser);
+            setRawUser(parsed);
+            const profile = await getUserProfile(parsed.uid);
+            if (profile) {
+              setUserProfile(profile);
+              setShowOnboarding(false);
+              return;
+            }
+          }
+        } catch {}
         setRawUser(null);
         setUserProfile(null);
         setShowOnboarding(false);
