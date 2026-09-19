@@ -23,7 +23,7 @@ export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({ onClose }) => 
                 HOW MILLION DOLLAR CANVAS WORKS
               </h2>
               <p className="text-xs text-gray-600 font-mono">
-                The 4-Million-Pixel Collaborative Internet Monument
+                The 1-Million-Pixel Collaborative Internet Monument
               </p>
             </div>
           </div>
@@ -44,10 +44,10 @@ export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({ onClose }) => 
             </div>
             <div>
               <div className="text-xs font-black font-mono uppercase text-black">
-                Select Your Territory
+                Select Your Territory (Multi-Area Supported)
               </div>
               <p className="text-xs text-gray-700 leading-relaxed mt-0.5">
-                Switch to <strong>"Select Pixels"</strong> mode in the top toolbar. Click & drag anywhere on the canvas (or touch & drag on mobile) to choose any rectangular block or individual pixel.
+                Switch to <strong>"Select Pixels"</strong> mode. Click & drag anywhere to select one or multiple areas. If your selection touches already-owned pixels, they are automatically excluded so you only pay for unpainted pixels! You can also erase by dragging over them.
               </p>
             </div>
           </div>
@@ -59,10 +59,10 @@ export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({ onClose }) => 
             </div>
             <div>
               <div className="text-xs font-black font-mono uppercase text-black">
-                Buy at $0.25 Per Pixel (4 px = $1.00)
+                Buy at $0.50 Per Pixel (2 px = $1.00)
               </div>
               <p className="text-xs text-gray-700 leading-relaxed mt-0.5">
-                The canvas has exactly 4,000,000 pixels (2,000 × 2,000 grid). A 10×10 plot is 100 pixels for $25.00. Payment locks in your permanent ownership.
+                The canvas has exactly 1,000,000 pixels (1,000 × 1,000 grid). A 10×10 plot is 100 pixels for $50.00. Payment locks in your permanent ownership in the database forever.
               </p>
             </div>
           </div>

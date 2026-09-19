@@ -1,6 +1,6 @@
 {
   "name": "Million Dollar Canvas",
-  "description": "A collaborative 4-million-pixel interactive canvas with neo-brutalist styling, pixel ownership, interactive notes, and leaderboard.",
+  "description": "A collaborative 1-million-pixel interactive canvas with neo-brutalist styling, $0.50/pixel ownership, interactive notes, and leaderboard.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

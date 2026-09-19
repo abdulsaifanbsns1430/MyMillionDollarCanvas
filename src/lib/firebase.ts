@@ -3,6 +3,9 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInAnonymously,
   signOut as fbSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -35,7 +38,7 @@ export const db = firebaseConfig.firestoreDatabaseId
   ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
   : getFirestore(app);
 
-// Authentication helper with popup or demo fallback
+// Authentication helpers
 export async function signInWithGoogle(): Promise<FirebaseUser | null> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
@@ -44,6 +47,21 @@ export async function signInWithGoogle(): Promise<FirebaseUser | null> {
     console.error('Google Sign-in error:', err);
     throw err;
   }
+}
+
+export async function signInWithEmail(email: string, pass: string): Promise<FirebaseUser> {
+  const result = await signInWithEmailAndPassword(auth, email.trim(), pass);
+  return result.user;
+}
+
+export async function signUpWithEmail(email: string, pass: string): Promise<FirebaseUser> {
+  const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+  return result.user;
+}
+
+export async function signInGuest(): Promise<FirebaseUser> {
+  const result = await signInAnonymously(auth);
+  return result.user;
 }
 
 export async function logOut(): Promise<void> {
@@ -126,8 +144,13 @@ export async function createUserProfile(
 // Plots operations
 export async function savePlot(plot: Plot): Promise<void> {
   try {
+    const cleanPlot: Plot = {
+      ...plot,
+      ownerPhotoURL: plot.ownerPhotoURL || '',
+      linkUrl: plot.linkUrl || '',
+    };
     const plotRef = doc(db, 'plots', plot.id);
-    await setDoc(plotRef, plot);
+    await setDoc(plotRef, cleanPlot);
 
     // Update user stats
     const userRef = doc(db, 'users', plot.ownerId);

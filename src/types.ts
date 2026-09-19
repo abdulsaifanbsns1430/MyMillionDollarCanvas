@@ -33,6 +33,16 @@ export interface Plot {
   updatedAt: number;
 }
 
+export interface SelectionRegion {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pixelCount: number;
+  cost: number;
+}
+
 export interface PixelSelection {
   startX: number;
   startY: number;
@@ -42,10 +52,16 @@ export interface PixelSelection {
   height: number;
   x: number;
   y: number;
+  // Multi-region support
+  regions: SelectionRegion[];
   pixelCount: number;
   cost: number;
-  hasCollision: boolean;
-  collidingPlots: string[];
+  hasCollision?: boolean;
+  collidingPlots?: string[];
+  // Automatic exclusion metadata
+  excludedOwnedPixelsCount: number;
+  excludedPlotTitles?: string[];
+  notificationMessage?: string;
 }
 
 export interface ViewportState {

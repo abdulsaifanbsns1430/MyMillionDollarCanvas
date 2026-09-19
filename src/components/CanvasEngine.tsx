@@ -1,16 +1,20 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { Plot, PixelSelection, ViewportState } from '../types';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   evaluateSelection,
+  applyDragSelection,
+  rectsOverlap,
   PRICE_PER_PIXEL,
   hexToRgb,
 } from '../lib/canvasUtils';
+import { AlertCircle, CheckCircle } from 'lucide-react';
 
 interface CanvasEngineProps {
   plots: Plot[];
   mode: 'pan' | 'select';
+  selectionAction?: 'add' | 'remove';
   viewport: ViewportState;
   onViewportChange: (viewport: ViewportState) => void;
   onSelectPlot: (plot: Plot) => void;
@@ -22,6 +26,7 @@ interface CanvasEngineProps {
 export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   plots,
   mode,
+  selectionAction = 'add',
   viewport,
   onViewportChange,
   onSelectPlot,
@@ -33,21 +38,51 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  // In-memory offscreen master canvas for 2000x2000 pixel raster
+  // In-memory offscreen master canvas for 1000x1000 pixel raster
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const masterCtxRef = useRef<CanvasRenderingContext2D | null>(null);
 
   // Interaction tracking state
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const mouseWorldPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const mouseWorldPosRef = useRef<{ x: number; y: number }>({ x: 500, y: 500 });
   const isSpacePressedRef = useRef(false);
+  const isAltPressedRef = useRef(false);
+
+  // Active drag preview box for live visual feedback without mutating committed selection
+  const [activeDragBox, setActiveDragBox] = useState<{
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+  const activeDragBoxRef = useRef(activeDragBox);
+  activeDragBoxRef.current = activeDragBox;
+
+  const isSelectingRef = useRef(false);
+  const selectStartWorldRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Mobile pinch-zoom tracking
   const touchStartDistRef = useRef<number | null>(null);
   const touchStartCenterRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Initialize master 2000x2000 canvas in memory
+  // Keep latest state refs for native non-passive event handlers
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  const selectionActionRef = useRef(selectionAction);
+  selectionActionRef.current = selectionAction;
+
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
+  const plotsRef = useRef(plots);
+  plotsRef.current = plots;
+
+  // Initialize master 1000x1000 canvas in memory
   useEffect(() => {
     if (!masterCanvasRef.current) {
       const master = document.createElement('canvas');
@@ -72,16 +107,16 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     ctx.fillStyle = '#FAF8F5';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Subtle 100x100 grid markers on base
-    ctx.strokeStyle = '#EFE9DF';
+    // Subtle 50x50 and 100x100 grid markers on base
+    ctx.strokeStyle = '#EAE4D9';
     ctx.lineWidth = 1;
-    for (let x = 0; x < CANVAS_WIDTH; x += 100) {
+    for (let x = 0; x < CANVAS_WIDTH; x += 50) {
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, CANVAS_HEIGHT);
       ctx.stroke();
     }
-    for (let y = 0; y < CANVAS_HEIGHT; y += 100) {
+    for (let y = 0; y < CANVAS_HEIGHT; y += 50) {
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(CANVAS_WIDTH, y);
@@ -90,7 +125,6 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
     // Paint all plots
     plots.forEach((plot) => {
-      // Use direct imageData injection or fillRect for each pixel
       const w = plot.width;
       const h = plot.height;
       if (plot.pixels && plot.pixels.length === w * h) {
@@ -106,24 +140,17 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         }
         ctx.putImageData(imgData, plot.x, plot.y);
       } else {
-        // Fallback color block
-        ctx.fillStyle = '#4ECDC4';
-        ctx.fillRect(plot.x, plot.y, plot.width, plot.height);
+        ctx.fillStyle = '#FF6B6B';
+        ctx.fillRect(plot.x, plot.y, w, h);
       }
-
-      // Plot border
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 0.8;
-      ctx.strokeRect(plot.x + 0.5, plot.y + 0.5, plot.width, plot.height);
     });
 
-    // Trigger render
-    requestRender();
+    renderCanvases();
   }, [plots]);
 
-  // Coordinate conversion helpers
+  // Coordinate transforms
   const screenToWorld = useCallback(
-    (screenX: number, screenY: number): { x: number; y: number } => {
+    (screenX: number, screenY: number) => {
       return {
         x: (screenX - viewport.x) / viewport.zoom,
         y: (screenY - viewport.y) / viewport.zoom,
@@ -133,7 +160,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   );
 
   const worldToScreen = useCallback(
-    (worldX: number, worldY: number): { x: number; y: number } => {
+    (worldX: number, worldY: number) => {
       return {
         x: worldX * viewport.zoom + viewport.x,
         y: worldY * viewport.zoom + viewport.y,
@@ -142,41 +169,87 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     [viewport]
   );
 
-  // Main Render Loop (Viewport Culling & Sharp Pixel Rendering)
-  const requestRender = useCallback(() => {
-    const baseCanvas = baseCanvasRef.current;
-    const overlayCanvas = overlayCanvasRef.current;
-    const masterCanvas = masterCanvasRef.current;
-    if (!baseCanvas || !overlayCanvas || !masterCanvas) return;
+  // Resize canvas buffers to match container size
+  const updateCanvasDimensions = useCallback(() => {
+    if (!containerRef.current || !baseCanvasRef.current || !overlayCanvasRef.current) return;
+    const { clientWidth, clientHeight } = containerRef.current;
+    const dpr = window.devicePixelRatio || 1;
 
-    const baseCtx = baseCanvas.getContext('2d');
-    const overlayCtx = overlayCanvas.getContext('2d');
+    baseCanvasRef.current.width = clientWidth * dpr;
+    baseCanvasRef.current.height = clientHeight * dpr;
+    overlayCanvasRef.current.width = clientWidth * dpr;
+    overlayCanvasRef.current.height = clientHeight * dpr;
+
+    baseCanvasRef.current.style.width = `${clientWidth}px`;
+    baseCanvasRef.current.style.height = `${clientHeight}px`;
+    overlayCanvasRef.current.style.width = `${clientWidth}px`;
+    overlayCanvasRef.current.style.height = `${clientHeight}px`;
+
+    const baseCtx = baseCanvasRef.current.getContext('2d');
+    const overlayCtx = overlayCanvasRef.current.getContext('2d');
+    if (baseCtx) baseCtx.scale(dpr, dpr);
+    if (overlayCtx) overlayCtx.scale(dpr, dpr);
+
+    renderCanvases();
+  }, []);
+
+  useEffect(() => {
+    updateCanvasDimensions();
+    const handleResize = () => updateCanvasDimensions();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [updateCanvasDimensions]);
+
+  // Main Render Loop
+  const renderCanvases = useCallback(() => {
+    if (
+      !baseCanvasRef.current ||
+      !overlayCanvasRef.current ||
+      !masterCanvasRef.current ||
+      !containerRef.current
+    )
+      return;
+
+    const baseCtx = baseCanvasRef.current.getContext('2d');
+    const overlayCtx = overlayCanvasRef.current.getContext('2d');
     if (!baseCtx || !overlayCtx) return;
 
-    const width = baseCanvas.width;
-    const height = baseCanvas.height;
+    const { clientWidth: width, clientHeight: height } = containerRef.current;
 
-    // 1. Draw Master Canvas into Viewport with Culling
+    // 1. Draw Base Master Layer
+    baseCtx.imageSmoothingEnabled = false;
     baseCtx.clearRect(0, 0, width, height);
-    baseCtx.imageSmoothingEnabled = false; // preserve pixelated look
 
-    // Calculate source rect in master canvas
+    // Fill background with warm studio tone
+    baseCtx.fillStyle = '#ECE7DE';
+    baseCtx.fillRect(0, 0, width, height);
+
+    // Compute visible bounds
     const srcX = Math.max(0, -viewport.x / viewport.zoom);
     const srcY = Math.max(0, -viewport.y / viewport.zoom);
     const srcW = Math.min(CANVAS_WIDTH - srcX, width / viewport.zoom);
     const srcH = Math.min(CANVAS_HEIGHT - srcY, height / viewport.zoom);
 
-    // Destination rect on screen
-    const dstX = srcX * viewport.zoom + viewport.x;
-    const dstY = srcY * viewport.zoom + viewport.y;
+    const dstX = Math.max(0, viewport.x);
+    const dstY = Math.max(0, viewport.y);
     const dstW = srcW * viewport.zoom;
     const dstH = srcH * viewport.zoom;
 
-    if (srcW > 0 && srcH > 0) {
-      baseCtx.drawImage(masterCanvas, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
+    if (srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0) {
+      baseCtx.drawImage(
+        masterCanvasRef.current,
+        srcX,
+        srcY,
+        srcW,
+        srcH,
+        dstX,
+        dstY,
+        dstW,
+        dstH
+      );
     }
 
-    // Outer boundary of 2000x2000 world
+    // Outer Canvas Solid Neo-Brutalist Border
     const canvasTopLeft = worldToScreen(0, 0);
     const canvasBottomRight = worldToScreen(CANVAS_WIDTH, CANVAS_HEIGHT);
     baseCtx.strokeStyle = '#000000';
@@ -188,12 +261,12 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       canvasBottomRight.y - canvasTopLeft.y
     );
 
-    // 2. Draw Overlay Layer (Grid, Hover, Selection Marquee)
+    // 2. Draw Overlay Layer (Grid, Hover, Selection Marquees)
     overlayCtx.clearRect(0, 0, width, height);
 
-    // Render pixel grid lines when zoomed in sufficiently (> 6x)
+    // Render pixel grid lines when zoomed in sufficiently (>= 6x)
     if (viewport.zoom >= 6) {
-      overlayCtx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+      overlayCtx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
       overlayCtx.lineWidth = 0.5;
 
       const startWorldX = Math.max(0, Math.floor(srcX));
@@ -224,40 +297,60 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         const ph = plot.height * viewport.zoom;
 
         overlayCtx.strokeStyle = '#FFE169';
-        overlayCtx.lineWidth = 3;
+        overlayCtx.lineWidth = 4;
         overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
 
         overlayCtx.strokeStyle = '#000000';
-        overlayCtx.lineWidth = 1;
+        overlayCtx.lineWidth = 1.5;
         overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
       }
     }
 
-    // Render active selection bounding box
+    // Render all active selection regions (Multi-region support!)
     if (selection) {
+      const regionsToRender =
+        selection.regions && selection.regions.length > 0
+          ? selection.regions
+          : [
+              {
+                id: 'fallback_primary',
+                x: selection.x,
+                y: selection.y,
+                width: selection.width,
+                height: selection.height,
+                pixelCount: selection.pixelCount,
+                cost: selection.cost,
+              },
+            ];
+
+      regionsToRender.forEach((region) => {
+        const p1 = worldToScreen(region.x, region.y);
+        const pw = region.width * viewport.zoom;
+        const ph = region.height * viewport.zoom;
+
+        // Translucent teal neo-brutalist fill
+        overlayCtx.fillStyle = 'rgba(78, 205, 196, 0.38)';
+        overlayCtx.fillRect(p1.x, p1.y, pw, ph);
+
+        // Dashed black border
+        overlayCtx.strokeStyle = '#000000';
+        overlayCtx.lineWidth = 2.5;
+        overlayCtx.setLineDash([6, 4]);
+        overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
+        overlayCtx.setLineDash([]);
+      });
+
+      // Neo-brutalist Floating Info Tag near top-left of primary selection
       const p1 = worldToScreen(selection.x, selection.y);
-      const pw = selection.width * viewport.zoom;
-      const ph = selection.height * viewport.zoom;
+      const tagText =
+        regionsToRender.length > 1
+          ? `${regionsToRender.length} Areas • ${selection.pixelCount} px • $${selection.cost.toFixed(2)}`
+          : `${selection.width}×${selection.height} = ${selection.pixelCount} px ($${selection.cost.toFixed(2)})`;
 
-      // Fill transparent overlay
-      overlayCtx.fillStyle = selection.hasCollision
-        ? 'rgba(255, 107, 107, 0.35)'
-        : 'rgba(78, 205, 196, 0.35)';
-      overlayCtx.fillRect(p1.x, p1.y, pw, ph);
-
-      // Dash border
-      overlayCtx.strokeStyle = selection.hasCollision ? '#FF6B6B' : '#000000';
-      overlayCtx.lineWidth = 2.5;
-      overlayCtx.setLineDash([6, 4]);
-      overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
-      overlayCtx.setLineDash([]); // reset
-
-      // Neo-brutalist info tag floating at selection top-right
-      const tagText = `${selection.width}×${selection.height} = ${selection.pixelCount} px ($${selection.cost.toFixed(2)})`;
       overlayCtx.font = 'bold 12px monospace';
       const textMetrics = overlayCtx.measureText(tagText);
-      const tagW = textMetrics.width + 16;
-      const tagH = 24;
+      const tagW = textMetrics.width + 18;
+      const tagH = 26;
       const tagX = Math.min(width - tagW - 10, Math.max(10, p1.x));
       const tagY = Math.max(10, p1.y - tagH - 6);
 
@@ -265,61 +358,112 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       overlayCtx.fillStyle = '#000000';
       overlayCtx.fillRect(tagX + 3, tagY + 3, tagW, tagH);
 
-      overlayCtx.fillStyle = selection.hasCollision ? '#FF6B6B' : '#FFE169';
+      overlayCtx.fillStyle = '#FFE169';
       overlayCtx.fillRect(tagX, tagY, tagW, tagH);
 
       overlayCtx.strokeStyle = '#000000';
       overlayCtx.lineWidth = 2;
       overlayCtx.strokeRect(tagX, tagY, tagW, tagH);
 
-      // Tag Text
       overlayCtx.fillStyle = '#000000';
-      overlayCtx.fillText(tagText, tagX + 8, tagY + 16);
+      overlayCtx.fillText(tagText, tagX + 9, tagY + 17);
     }
-  }, [viewport, plots, selection, hoveredPlotId, worldToScreen]);
 
-  // Handle Canvas Resize
-  useEffect(() => {
-    const handleResize = () => {
-      const container = containerRef.current;
-      if (!container) return;
-      const { clientWidth, clientHeight } = container;
+    // 3. Render Active Drag Box Preview (Live dynamic visual feedback without modifying state)
+    if (activeDragBox) {
+      const minX = Math.max(0, Math.min(Math.round(activeDragBox.startX), Math.round(activeDragBox.currentX)));
+      const maxX = Math.min(CANVAS_WIDTH - 1, Math.max(Math.round(activeDragBox.startX), Math.round(activeDragBox.currentX)));
+      const minY = Math.max(0, Math.min(Math.round(activeDragBox.startY), Math.round(activeDragBox.currentY)));
+      const maxY = Math.min(CANVAS_HEIGHT - 1, Math.max(Math.round(activeDragBox.startY), Math.round(activeDragBox.currentY)));
+      const dw = Math.max(1, maxX - minX + 1);
+      const dh = Math.max(1, maxY - minY + 1);
+      const dragWorldRect = { x: minX, y: minY, width: dw, height: dh };
 
-      if (baseCanvasRef.current) {
-        baseCanvasRef.current.width = clientWidth;
-        baseCanvasRef.current.height = clientHeight;
+      const existingRegs = selection?.regions || [];
+      const dragStartedInside = existingRegs.some(
+        (r) =>
+          activeDragBox.startX >= r.x &&
+          activeDragBox.startX < r.x + r.width &&
+          activeDragBox.startY >= r.y &&
+          activeDragBox.startY < r.y + r.height
+      );
+      const overlapsExisting = existingRegs.some((r) => rectsOverlap(r, dragWorldRect));
+      const isUnselect = isAltPressedRef.current || selectionActionRef.current === 'remove' || dragStartedInside;
+
+      const p1 = worldToScreen(minX, minY);
+      const pw = dw * viewport.zoom;
+      const ph = dh * viewport.zoom;
+
+      if (isUnselect || (overlapsExisting && !dragStartedInside)) {
+        // Red / Coral preview indicating unselect/erase
+        overlayCtx.fillStyle = 'rgba(255, 107, 107, 0.4)';
+        overlayCtx.fillRect(p1.x, p1.y, pw, ph);
+
+        overlayCtx.strokeStyle = '#D63031';
+        overlayCtx.lineWidth = 2.5;
+        overlayCtx.setLineDash([4, 3]);
+        overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
+        overlayCtx.setLineDash([]);
+      } else {
+        // Teal preview indicating adding new pixels
+        overlayCtx.fillStyle = 'rgba(78, 205, 196, 0.45)';
+        overlayCtx.fillRect(p1.x, p1.y, pw, ph);
+
+        overlayCtx.strokeStyle = '#000000';
+        overlayCtx.lineWidth = 2.5;
+        overlayCtx.setLineDash([6, 4]);
+        overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
+        overlayCtx.setLineDash([]);
       }
-      if (overlayCanvasRef.current) {
-        overlayCanvasRef.current.width = clientWidth;
-        overlayCanvasRef.current.height = clientHeight;
-      }
 
-      requestRender();
-    };
+      // Drag badge label
+      const dragTagText = isUnselect
+        ? `Unselect (${dw}×${dh} px)`
+        : overlapsExisting
+        ? `Unselect Overlap (${dw}×${dh} px)`
+        : `+ Area • ${dw}×${dh} = ${dw * dh} px`;
 
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [requestRender]);
+      overlayCtx.font = 'bold 11px monospace';
+      const dMetrics = overlayCtx.measureText(dragTagText);
+      const dTagW = dMetrics.width + 16;
+      const dTagH = 24;
+      const dTagX = Math.min(width - dTagW - 10, Math.max(10, p1.x));
+      const dTagY = Math.max(10, p1.y - dTagH - 4);
 
-  // Re-render when viewport or selection changes
+      overlayCtx.fillStyle = isUnselect || (overlapsExisting && !dragStartedInside) ? '#FF7675' : '#FFE169';
+      overlayCtx.fillRect(dTagX, dTagY, dTagW, dTagH);
+
+      overlayCtx.strokeStyle = '#000000';
+      overlayCtx.lineWidth = 1.5;
+      overlayCtx.strokeRect(dTagX, dTagY, dTagW, dTagH);
+
+      overlayCtx.fillStyle = '#000000';
+      overlayCtx.fillText(dragTagText, dTagX + 8, dTagY + 16);
+    }
+  }, [viewport, plots, selection, hoveredPlotId, activeDragBox, worldToScreen]);
+
   useEffect(() => {
-    requestRender();
-  }, [requestRender]);
+    renderCanvases();
+  }, [renderCanvases]);
 
-  // Keyboard spacebar listener for quick pan mode
+  // Keyboard modifiers for spacebar panning and Alt deselecting
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !isSpacePressedRef.current) {
+      if (e.code === 'Space' && !e.repeat) {
         isSpacePressedRef.current = true;
+      }
+      if (e.altKey) {
+        isAltPressedRef.current = true;
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         isSpacePressedRef.current = false;
       }
+      if (!e.altKey) {
+        isAltPressedRef.current = false;
+      }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => {
@@ -328,31 +472,185 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     };
   }, []);
 
-  // Mouse wheel zoom centered at cursor
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
+  // Native NON-PASSIVE Event Listeners on container to PREVENT browser window zooming & scrolling!
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    // Wheel zoom strictly inside canvas
+    const handleNativeWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    // Zoom multiplier
-    const zoomFactor = e.deltaY < 0 ? 1.18 : 0.85;
-    const newZoom = Math.min(32, Math.max(0.2, viewport.zoom * zoomFactor));
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
 
-    // Calculate new viewport position to zoom towards cursor
-    const newX = mouseX - ((mouseX - viewport.x) * newZoom) / viewport.zoom;
-    const newY = mouseY - ((mouseY - viewport.y) * newZoom) / viewport.zoom;
+      const currentVp = viewportRef.current;
+      const zoomFactor = e.deltaY < 0 ? 1.18 : 0.85;
+      const newZoom = Math.min(32, Math.max(0.2, currentVp.zoom * zoomFactor));
 
-    onViewportChange({
-      x: newX,
-      y: newY,
-      zoom: newZoom,
-    });
-  };
+      const newX = mouseX - ((mouseX - currentVp.x) * newZoom) / currentVp.zoom;
+      const newY = mouseY - ((mouseY - currentVp.y) * newZoom) / currentVp.zoom;
 
-  // Mouse Down handler
+      onViewportChange({
+        x: newX,
+        y: newY,
+        zoom: newZoom,
+      });
+    };
+
+    // Touch start
+    const handleNativeTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const rect = container.getBoundingClientRect();
+        const screenX = touch.clientX - rect.left;
+        const screenY = touch.clientY - rect.top;
+        const currentVp = viewportRef.current;
+        const worldX = (screenX - currentVp.x) / currentVp.zoom;
+        const worldY = (screenY - currentVp.y) / currentVp.zoom;
+
+        isDraggingRef.current = true;
+        dragStartRef.current = { x: screenX, y: screenY };
+
+        if (modeRef.current === 'select') {
+          isSelectingRef.current = true;
+          selectStartWorldRef.current = { x: worldX, y: worldY };
+          setActiveDragBox({
+            startX: worldX,
+            startY: worldY,
+            currentX: worldX,
+            currentY: worldY,
+          });
+        }
+      } else if (e.touches.length === 2) {
+        e.preventDefault();
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        touchStartDistRef.current = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        touchStartCenterRef.current = {
+          x: (t1.clientX + t2.clientX) / 2,
+          y: (t1.clientY + t2.clientY) / 2,
+        };
+      }
+    };
+
+    // Touch move
+    const handleNativeTouchMove = (e: TouchEvent) => {
+      e.preventDefault(); // Prevents browser pulling/zooming the whole page
+      const rect = container.getBoundingClientRect();
+
+      if (e.touches.length === 1 && isDraggingRef.current) {
+        const touch = e.touches[0];
+        const screenX = touch.clientX - rect.left;
+        const screenY = touch.clientY - rect.top;
+        const dx = screenX - dragStartRef.current.x;
+        const dy = screenY - dragStartRef.current.y;
+        const currentVp = viewportRef.current;
+
+        if (modeRef.current === 'pan') {
+          onViewportChange({
+            ...currentVp,
+            x: currentVp.x + dx,
+            y: currentVp.y + dy,
+          });
+          dragStartRef.current = { x: screenX, y: screenY };
+        } else if (modeRef.current === 'select' && isSelectingRef.current) {
+          const worldX = (screenX - currentVp.x) / currentVp.zoom;
+          const worldY = (screenY - currentVp.y) / currentVp.zoom;
+          setActiveDragBox({
+            startX: selectStartWorldRef.current.x,
+            startY: selectStartWorldRef.current.y,
+            currentX: worldX,
+            currentY: worldY,
+          });
+        }
+      } else if (e.touches.length === 2 && touchStartDistRef.current) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const ratio = dist / touchStartDistRef.current;
+        const currentVp = viewportRef.current;
+        const newZoom = Math.min(32, Math.max(0.2, currentVp.zoom * ratio));
+        touchStartDistRef.current = dist;
+
+        onViewportChange({
+          ...currentVp,
+          zoom: newZoom,
+        });
+      }
+    };
+
+    const handleNativeTouchEnd = () => {
+      isDraggingRef.current = false;
+      touchStartDistRef.current = null;
+      touchStartCenterRef.current = null;
+
+      if (modeRef.current === 'select' && isSelectingRef.current) {
+        isSelectingRef.current = false;
+        const curBox = activeDragBoxRef.current;
+        setActiveDragBox(null);
+
+        if (curBox) {
+          const startW = { x: curBox.startX, y: curBox.startY };
+          const endW = { x: curBox.currentX, y: curBox.currentY };
+          const worldDist = Math.hypot(endW.x - startW.x, endW.y - startW.y);
+          const forceAction =
+            isAltPressedRef.current || selectionActionRef.current === 'remove' ? 'remove' : undefined;
+
+          if (worldDist >= 1.5) {
+            const newSel = applyDragSelection(
+              startW.x,
+              startW.y,
+              endW.x,
+              endW.y,
+              plotsRef.current,
+              selectionRef.current?.regions || [],
+              forceAction
+            );
+            onSelectionChange(newSel);
+          } else {
+            const clickedPlot = plotsRef.current.find(
+              (p) =>
+                startW.x >= p.x &&
+                startW.x < p.x + p.width &&
+                startW.y >= p.y &&
+                startW.y < p.y + p.height
+            );
+            if (clickedPlot) {
+              onSelectPlot(clickedPlot);
+            } else {
+              const newSel = applyDragSelection(
+                startW.x,
+                startW.y,
+                startW.x,
+                startW.y,
+                plotsRef.current,
+                selectionRef.current?.regions || [],
+                forceAction
+              );
+              onSelectionChange(newSel);
+            }
+          }
+        }
+      }
+    };
+
+    container.addEventListener('wheel', handleNativeWheel, { passive: false });
+    container.addEventListener('touchstart', handleNativeTouchStart, { passive: false });
+    container.addEventListener('touchmove', handleNativeTouchMove, { passive: false });
+    container.addEventListener('touchend', handleNativeTouchEnd, { passive: false });
+
+    return () => {
+      container.removeEventListener('wheel', handleNativeWheel);
+      container.removeEventListener('touchstart', handleNativeTouchStart);
+      container.removeEventListener('touchmove', handleNativeTouchMove);
+      container.removeEventListener('touchend', handleNativeTouchEnd);
+    };
+  }, [onViewportChange, onSelectionChange, onSelectPlot]);
+
+  // Desktop Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -364,29 +662,22 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     isDraggingRef.current = true;
     dragStartRef.current = { x: screenX, y: screenY };
 
-    // Pan condition: middle mouse, spacebar, or pan mode
     if (e.button === 1 || isSpacePressedRef.current || mode === 'pan') {
-      // Pan initiated
       return;
     }
 
     if (e.button === 0 && mode === 'select') {
-      // Check if clicked directly on an existing plot first
-      const clickedPlot = plots.find(
-        (p) =>
-          worldPos.x >= p.x &&
-          worldPos.x < p.x + p.width &&
-          worldPos.y >= p.y &&
-          worldPos.y < p.y + p.height
-      );
-
-      // Start drag selection
-      const initialSel = evaluateSelection(worldPos.x, worldPos.y, worldPos.x, worldPos.y, plots);
-      onSelectionChange(initialSel);
+      isSelectingRef.current = true;
+      selectStartWorldRef.current = { x: worldPos.x, y: worldPos.y };
+      setActiveDragBox({
+        startX: worldPos.x,
+        startY: worldPos.y,
+        currentX: worldPos.x,
+        currentY: worldPos.y,
+      });
     }
   };
 
-  // Mouse Move handler
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -402,33 +693,29 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     const dy = screenY - dragStartRef.current.y;
 
     if (e.buttons === 4 || isSpacePressedRef.current || mode === 'pan') {
-      // Panning canvas
       onViewportChange({
         ...viewport,
         x: viewport.x + dx,
         y: viewport.y + dy,
       });
       dragStartRef.current = { x: screenX, y: screenY };
-    } else if (mode === 'select' && selection) {
-      // Updating selection box
-      const updatedSel = evaluateSelection(
-        selection.startX,
-        selection.startY,
-        worldPos.x,
-        worldPos.y,
-        plots
-      );
-      onSelectionChange(updatedSel);
+    } else if (mode === 'select' && isSelectingRef.current) {
+      setActiveDragBox({
+        startX: selectStartWorldRef.current.x,
+        startY: selectStartWorldRef.current.y,
+        currentX: worldPos.x,
+        currentY: worldPos.y,
+      });
     }
   };
 
-  // Mouse Up handler
   const handleMouseUp = (e: React.MouseEvent) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
+    const worldPos = screenToWorld(screenX, screenY);
     const totalDragDist = Math.hypot(
       screenX - dragStartRef.current.x,
       screenY - dragStartRef.current.y
@@ -436,8 +723,55 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
     isDraggingRef.current = false;
 
-    // If click had minimal movement (e.g. < 5px), treat as a click to inspect plot
-    if (totalDragDist < 5) {
+    if (mode === 'select' && isSelectingRef.current) {
+      isSelectingRef.current = false;
+      const curBox = activeDragBoxRef.current;
+      setActiveDragBox(null);
+
+      const startW = curBox ? { x: curBox.startX, y: curBox.startY } : selectStartWorldRef.current;
+      const endW = curBox ? { x: curBox.currentX, y: curBox.currentY } : worldPos;
+      const worldDist = Math.hypot(endW.x - startW.x, endW.y - startW.y);
+      const forceAction =
+        e.altKey || isAltPressedRef.current || selectionAction === 'remove' ? 'remove' : undefined;
+
+      if (worldDist >= 1.5) {
+        const newSel = applyDragSelection(
+          startW.x,
+          startW.y,
+          endW.x,
+          endW.y,
+          plots,
+          selection?.regions || [],
+          forceAction
+        );
+        onSelectionChange(newSel);
+      } else {
+        // Single click
+        const clickedPlot = plots.find(
+          (p) =>
+            worldPos.x >= p.x &&
+            worldPos.x < p.x + p.width &&
+            worldPos.y >= p.y &&
+            worldPos.y < p.y + p.height
+        );
+
+        if (clickedPlot) {
+          onSelectPlot(clickedPlot);
+        } else {
+          // Toggle 1x1 pixel
+          const newSel = applyDragSelection(
+            worldPos.x,
+            worldPos.y,
+            worldPos.x,
+            worldPos.y,
+            plots,
+            selection?.regions || [],
+            forceAction
+          );
+          onSelectionChange(newSel);
+        }
+      }
+    } else if (totalDragDist < 5) {
       const worldPos = screenToWorld(screenX, screenY);
       const clickedPlot = plots.find(
         (p) =>
@@ -449,134 +783,61 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
       if (clickedPlot) {
         onSelectPlot(clickedPlot);
-        onSelectionChange(null);
       }
     }
-  };
-
-  // Touch Handlers for Mobile Pan, Pinch-Zoom & Selection
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      const screenX = touch.clientX - rect.left;
-      const screenY = touch.clientY - rect.top;
-      const worldPos = screenToWorld(screenX, screenY);
-
-      isDraggingRef.current = true;
-      dragStartRef.current = { x: screenX, y: screenY };
-
-      if (mode === 'select') {
-        const initialSel = evaluateSelection(
-          worldPos.x,
-          worldPos.y,
-          worldPos.x,
-          worldPos.y,
-          plots
-        );
-        onSelectionChange(initialSel);
-      }
-    } else if (e.touches.length === 2) {
-      // Pinch zoom start
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      touchStartDistRef.current = dist;
-      touchStartCenterRef.current = {
-        x: (t1.clientX + t2.clientX) / 2,
-        y: (t1.clientY + t2.clientY) / 2,
-      };
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 1 && isDraggingRef.current) {
-      const touch = e.touches[0];
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      const screenX = touch.clientX - rect.left;
-      const screenY = touch.clientY - rect.top;
-      const dx = screenX - dragStartRef.current.x;
-      const dy = screenY - dragStartRef.current.y;
-
-      if (mode === 'pan') {
-        onViewportChange({
-          ...viewport,
-          x: viewport.x + dx,
-          y: viewport.y + dy,
-        });
-        dragStartRef.current = { x: screenX, y: screenY };
-      } else if (mode === 'select' && selection) {
-        const worldPos = screenToWorld(screenX, screenY);
-        const updatedSel = evaluateSelection(
-          selection.startX,
-          selection.startY,
-          worldPos.x,
-          worldPos.y,
-          plots
-        );
-        onSelectionChange(updatedSel);
-      }
-    } else if (e.touches.length === 2 && touchStartDistRef.current && touchStartCenterRef.current) {
-      // Handle pinch zoom
-      const t1 = e.touches[0];
-      const t2 = e.touches[1];
-      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const ratio = dist / touchStartDistRef.current;
-
-      const newZoom = Math.min(32, Math.max(0.2, viewport.zoom * ratio));
-      touchStartDistRef.current = dist;
-
-      onViewportChange({
-        ...viewport,
-        zoom: newZoom,
-      });
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    isDraggingRef.current = false;
-    touchStartDistRef.current = null;
-    touchStartCenterRef.current = null;
   };
 
   return (
     <div
       ref={containerRef}
       id="canvas-viewport-container"
-      className={`relative w-full h-full overflow-hidden bg-[#FAF8F5] select-none ${
-        mode === 'pan' || isSpacePressedRef.current ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'
+      className={`relative w-full h-full overflow-hidden bg-[#ECE7DE] select-none touch-none ${
+        mode === 'pan' || isSpacePressedRef.current
+          ? 'cursor-grab active:cursor-grabbing'
+          : 'cursor-crosshair'
       }`}
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
     >
       {/* Base Canvas */}
-      <canvas ref={baseCanvasRef} className="absolute inset-0 block w-full h-full pointer-events-none" />
+      <canvas
+        ref={baseCanvasRef}
+        className="absolute inset-0 block w-full h-full pointer-events-none"
+      />
 
       {/* Interactive Overlay Canvas */}
-      <canvas ref={overlayCanvasRef} className="absolute inset-0 block w-full h-full pointer-events-none" />
+      <canvas
+        ref={overlayCanvasRef}
+        className="absolute inset-0 block w-full h-full pointer-events-none"
+      />
+
+      {/* Auto-Deselect Exclusion Toast Banner if owned pixels were trimmed */}
+      {selection?.notificationMessage && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 max-w-lg w-11/12 sm:w-auto bg-[#FFE169] border-[2.5px] border-black shadow-[4px_4px_0px_#000] px-4 py-2 rounded-xl flex items-center gap-2.5 text-xs font-black font-mono text-black z-20 animate-in fade-in slide-in-from-top-2">
+          <AlertCircle className="w-4 h-4 text-black shrink-0" />
+          <span>{selection.notificationMessage}</span>
+        </div>
+      )}
 
       {/* Floating Coordinate HUD in bottom-left */}
       <div className="absolute bottom-4 left-4 bg-white border-[2px] border-black shadow-[3px_3px_0px_#000] px-3 py-1.5 rounded-xl flex items-center gap-3 text-xs font-mono font-bold pointer-events-none z-10">
         <div>
           <span className="text-gray-500">POS: </span>
           <span className="text-black">
-            X:{Math.min(1999, Math.max(0, Math.floor(mouseWorldPosRef.current.x)))}, Y:
-            {Math.min(1999, Math.max(0, Math.floor(mouseWorldPosRef.current.y)))}
+            X:{Math.min(CANVAS_WIDTH - 1, Math.max(0, Math.floor(mouseWorldPosRef.current.x)))}, Y:
+            {Math.min(CANVAS_HEIGHT - 1, Math.max(0, Math.floor(mouseWorldPosRef.current.y)))}
           </span>
         </div>
         <div className="text-gray-300">|</div>
         <div>
           <span className="text-gray-500">ZOOM: </span>
           <span className="text-black">{Math.round(viewport.zoom * 100)}%</span>
+        </div>
+        <div className="text-gray-300">|</div>
+        <div>
+          <span className="text-gray-500">SIZE: </span>
+          <span className="text-black">1M PIXELS</span>
         </div>
       </div>
     </div>

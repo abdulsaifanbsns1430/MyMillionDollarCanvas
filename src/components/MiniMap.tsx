@@ -96,7 +96,7 @@ export const MiniMap: React.FC<MiniMapProps> = ({
         <div className="bg-[#FFE169] border-b-[2px] border-black px-2 py-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 text-[11px] font-extrabold font-mono text-black uppercase">
             <Compass className="w-3 h-3 text-black" />
-            <span>Radar (2000×2000)</span>
+            <span>Radar (1000×1000)</span>
           </div>
           <button
             onClick={() => setIsExpanded(!isExpanded)}

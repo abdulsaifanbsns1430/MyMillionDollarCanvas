@@ -3,6 +3,7 @@ import { Navbar } from './components/Navbar';
 import { CanvasEngine } from './components/CanvasEngine';
 import { Toolbar } from './components/Toolbar';
 import { MiniMap } from './components/MiniMap';
+import { AuthModal } from './components/AuthModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { BuyPixelsModal } from './components/BuyPixelsModal';
 import { PlotNoteModal } from './components/PlotNoteModal';
@@ -20,35 +21,35 @@ import {
 } from './types';
 import {
   auth,
-  signInWithGoogle,
   logOut,
   getUserProfile,
   subscribePlots,
   savePlot,
   updatePlotArtworkAndNote,
 } from './lib/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   getInitialSeedPlots,
 } from './lib/canvasUtils';
-import { Sparkles, Info } from 'lucide-react';
 
 export default function App() {
   // Auth state
-  const [rawUser, setRawUser] = useState<any>(null);
+  const [rawUser, setRawUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
 
   // Canvas & Plot state
+  // Default mode is 'pan' as requested!
+  const [mode, setMode] = useState<'pan' | 'select'>('pan');
+  const [selectionAction, setSelectionAction] = useState<'add' | 'remove'>('add');
   const [plots, setPlots] = useState<Plot[]>(() => getInitialSeedPlots());
-  const [mode, setMode] = useState<'pan' | 'select'>('select');
   const [selection, setSelection] = useState<PixelSelection | null>(null);
   const [hoveredPlotId, setHoveredPlotId] = useState<string | null>(null);
 
-  // Viewport tracking (default centered on 1000, 1000)
+  // Viewport tracking (default centered on 500, 500 for 1000x1000)
   const [viewport, setViewport] = useState<ViewportState>({
     x: 0,
     y: 0,
@@ -86,13 +87,12 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Center canvas on first load
+  // Center canvas on first load (1000x1000)
   useEffect(() => {
     const initialWidth = window.innerWidth;
     const initialHeight = window.innerHeight - 60;
     const initialZoom = 1.0;
 
-    // Check URL parameters for direct coordinate linking
     const params = new URLSearchParams(window.location.search);
     const paramX = params.get('x');
     const paramY = params.get('y');
@@ -119,7 +119,7 @@ export default function App() {
             setUserProfile(profile);
             setShowOnboarding(false);
           } else {
-            // User signed in for the first time -> prompt onboarding modal
+            // User successfully authenticated for the first time -> prompt onboarding modal
             setShowOnboarding(true);
           }
         } catch (err) {
@@ -152,32 +152,9 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Handle Google Login
-  const handleLogin = async () => {
-    setAuthError(null);
-    try {
-      const user = await signInWithGoogle();
-      if (user) {
-        const profile = await getUserProfile(user.uid);
-        if (profile) {
-          setUserProfile(profile);
-        } else {
-          setShowOnboarding(true);
-        }
-      }
-    } catch (err: any) {
-      console.warn('Sign-in failed or blocked by iframe popup policy:', err);
-      // If popup was blocked or failed in preview, offer guest profile creation directly
-      setAuthError('Google Sign-in prompt closed. You can also create a demo profile instantly.');
-      const demoUid = 'demo_user_' + Math.random().toString(36).substring(2, 9);
-      setRawUser({
-        uid: demoUid,
-        displayName: 'Creative Pioneer',
-        email: 'creator@canvas.io',
-        photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=Pioneer',
-      });
-      setShowOnboarding(true);
-    }
+  // Handle Login button clicked
+  const handleOpenLogin = () => {
+    setIsAuthModalOpen(true);
   };
 
   const handleLogout = async () => {
@@ -185,6 +162,7 @@ export default function App() {
       await logOut();
       setRawUser(null);
       setUserProfile(null);
+      setShowOnboarding(false);
     } catch (err) {
       console.error('Logout error:', err);
     }
@@ -207,32 +185,33 @@ export default function App() {
   // Buy Selected Area Trigger
   const handleOpenBuyModal = () => {
     if (!userProfile) {
-      if (!rawUser) {
-        handleLogin();
-      } else {
-        setShowOnboarding(true);
-      }
+      setIsAuthModalOpen(true);
       return;
     }
 
-    if (selection && !selection.hasCollision) {
+    if (selection && selection.pixelCount > 0) {
       setIsBuyModalOpen(true);
     }
   };
 
-  // Purchase Complete Callback
-  const handlePurchaseSuccess = async (newPlot: Plot) => {
+  // Purchase Complete Callback (supports multiple plots/areas)
+  const handlePurchaseSuccess = async (newPlots: Plot[]) => {
     try {
-      // 1. Save to Firestore
-      await savePlot(newPlot);
+      // 1. Save all plots to Firestore
+      for (const plot of newPlots) {
+        await savePlot(plot);
+      }
 
       // 2. Update local state
-      setPlots((prev) => [...prev, newPlot]);
+      setPlots((prev) => [...prev, ...newPlots]);
+      const addedPixels = newPlots.reduce((sum, p) => sum + p.pixelCount, 0);
+      const addedCost = newPlots.reduce((sum, p) => sum + p.pricePaid, 0);
+
       if (userProfile) {
         setUserProfile({
           ...userProfile,
-          totalPixelsBought: (userProfile.totalPixelsBought || 0) + newPlot.pixelCount,
-          totalSpent: (userProfile.totalSpent || 0) + newPlot.pricePaid,
+          totalPixelsBought: (userProfile.totalPixelsBought || 0) + addedPixels,
+          totalSpent: (userProfile.totalSpent || 0) + addedCost,
         });
       }
 
@@ -240,15 +219,19 @@ export default function App() {
       setIsBuyModalOpen(false);
       setSelection(null);
 
-      // 4. Immediately open Paint Studio so owner can begin painting
-      setActivePlotForPaint(newPlot);
+      // 4. Open Paint Studio for the first plot
+      if (newPlots.length > 0) {
+        setActivePlotForPaint(newPlots[0]);
+      }
     } catch (err) {
-      console.error('Error saving new plot:', err);
-      // Even if Firestore has transient error, save to local session
-      setPlots((prev) => [...prev, newPlot]);
+      console.error('Error saving new plot to Firebase:', err);
+      // Ensure local state preserves plot even on network delay
+      setPlots((prev) => [...prev, ...newPlots]);
       setIsBuyModalOpen(false);
       setSelection(null);
-      setActivePlotForPaint(newPlot);
+      if (newPlots.length > 0) {
+        setActivePlotForPaint(newPlots[0]);
+      }
     }
   };
 
@@ -284,12 +267,15 @@ export default function App() {
   };
 
   return (
-    <div id="million-dollar-canvas-app" className="w-screen h-screen flex flex-col bg-[#FAF8F5] overflow-hidden">
+    <div
+      id="million-dollar-canvas-app"
+      className="w-screen h-screen flex flex-col bg-[#FAF8F5] overflow-hidden select-none"
+    >
       {/* Top Neo-Brutalist Navbar */}
       <Navbar
         user={userProfile}
         rawUser={rawUser}
-        onLogin={handleLogin}
+        onLogin={handleOpenLogin}
         onLogout={handleLogout}
         onOpenLeaderboard={() => setIsLeaderboardOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
@@ -300,11 +286,13 @@ export default function App() {
       />
 
       {/* Main Canvas Viewport Area */}
-      <main className="relative flex-1 w-full h-full overflow-hidden bg-[#FAF8F5]">
+      <main className="relative flex-1 w-full h-full overflow-hidden bg-[#ECE7DE]">
         {/* Floating Top Toolbar */}
         <Toolbar
           mode={mode}
           onModeChange={setMode}
+          selectionAction={selectionAction}
+          onSelectionActionChange={setSelectionAction}
           viewport={viewport}
           onViewportChange={setViewport}
           selection={selection}
@@ -318,6 +306,7 @@ export default function App() {
         <CanvasEngine
           plots={plots}
           mode={mode}
+          selectionAction={selectionAction}
           viewport={viewport}
           onViewportChange={setViewport}
           onSelectPlot={(plot) => setActivePlotForNote(plot)}
@@ -338,7 +327,18 @@ export default function App() {
 
       {/* MODALS */}
 
-      {/* 1. Onboarding Profile Gate (Mandatory on First Sign-in) */}
+      {/* 0. Real Firebase Authentication Modal */}
+      {isAuthModalOpen && (
+        <AuthModal
+          onClose={() => setIsAuthModalOpen(false)}
+          onSuccess={(user) => {
+            setRawUser(user);
+            setIsAuthModalOpen(false);
+          }}
+        />
+      )}
+
+      {/* 1. Onboarding Profile Gate (Appears ONLY AFTER Successful Firebase Login) */}
       {showOnboarding && rawUser && (
         <OnboardingModal
           rawUser={rawUser}
