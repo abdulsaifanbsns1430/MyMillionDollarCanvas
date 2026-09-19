@@ -32,7 +32,6 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
-  getInitialSeedPlots,
 } from './lib/canvasUtils';
 
 export default function App() {
@@ -46,7 +45,7 @@ export default function App() {
   // Default mode is 'pan' as requested!
   const [mode, setMode] = useState<'pan' | 'select'>('pan');
   const [selectionAction, setSelectionAction] = useState<'add' | 'remove'>('add');
-  const [plots, setPlots] = useState<Plot[]>(() => getInitialSeedPlots());
+  const [plots, setPlots] = useState<Plot[]>([]);
   const [selection, setSelection] = useState<PixelSelection | null>(null);
   const [hoveredPlotId, setHoveredPlotId] = useState<string | null>(null);
 
@@ -128,22 +127,6 @@ export default function App() {
           setShowOnboarding(true);
         }
       } else {
-        // Fallback to active local guest/demo profile if present
-        const stored = localStorage.getItem('million_canvas_active_profile');
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored) as UserProfile;
-            setUserProfile(parsed);
-            setRawUser({
-              uid: parsed.uid,
-              displayName: parsed.displayName,
-              email: parsed.email || '',
-              photoURL: parsed.photoURL || '',
-            });
-            setShowOnboarding(false);
-            return;
-          } catch {}
-        }
         setRawUser(null);
         setUserProfile(null);
         setShowOnboarding(false);
@@ -156,14 +139,7 @@ export default function App() {
   // Subscribe to real-time plots from Firestore
   useEffect(() => {
     const unsubscribe = subscribePlots((remotePlots) => {
-      if (remotePlots && remotePlots.length > 0) {
-        // Merge seed plots with remote plots (remote plots take precedence)
-        const seedPlots = getInitialSeedPlots();
-        const plotMap = new Map<string, Plot>();
-        seedPlots.forEach((p) => plotMap.set(p.id, p));
-        remotePlots.forEach((p) => plotMap.set(p.id, p));
-        setPlots(Array.from(plotMap.values()));
-      }
+      setPlots(remotePlots || []);
     });
 
     return () => unsubscribe();

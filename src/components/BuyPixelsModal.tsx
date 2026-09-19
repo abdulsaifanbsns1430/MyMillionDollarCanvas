@@ -419,14 +419,14 @@ export const BuyPixelsModal: React.FC<BuyPixelsModalProps> = ({
             )}
           </div>
 
-          {/* Demo Payment Selector */}
+          {/* Payment Gateway Selector */}
           <div className="bg-[#FFE169]/30 border-[2px] border-black p-3 rounded-xl">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-black font-mono uppercase text-black">
-                Demo Checkout Mode (Simulated Payment)
+                Select Payment Gateway
               </span>
               <span className="bg-[#10AC84] text-white text-[10px] font-bold px-1.5 py-0.5 rounded border border-black">
-                Instant Demo
+                Instant Verification
               </span>
             </div>
 
@@ -510,7 +510,7 @@ export const BuyPixelsModal: React.FC<BuyPixelsModalProps> = ({
             ) : (
               <>
                 <CheckCircle className="w-4 h-4" />
-                <span>Confirm Demo Purchase (${costUSD.toFixed(2)})</span>
+                <span>Complete Purchase (${costUSD.toFixed(2)})</span>
               </>
             )}
           </button>

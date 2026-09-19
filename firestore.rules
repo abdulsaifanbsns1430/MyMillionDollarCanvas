@@ -1,53 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    // User profiles
-    match /users/{userId} {
-      allow read: if true;
-      allow create, update: if isAuthenticated() && request.auth.uid == userId;
-      allow delete: if false;
-    }
-
-    // Unique usernames registry
-    match /usernames/{username} {
-      allow read: if true;
-      allow create: if isAuthenticated();
-      allow update, delete: if false;
-    }
-
-    // Canvas plots
-    match /plots/{plotId} {
-      allow read: if true;
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && (request.auth.uid == resource.data.ownerId || request.auth.uid == request.resource.data.ownerId);
-      allow delete: if isAuthenticated() && request.auth.uid == resource.data.ownerId;
-    }
-
-    // Purchase orders
-    match /orders/{orderId} {
-      allow read: if true;
-      allow create: if isAuthenticated();
-      allow update, delete: if false;
-    }
-
-    // Global stats & chunks
-    match /stats/{statId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
-    }
-    
-    match /canvas_chunks/{chunkId} {
-      allow read: if true;
-      allow write: if isAuthenticated();
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }

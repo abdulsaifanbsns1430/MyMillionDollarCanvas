@@ -23,6 +23,7 @@ import {
   orderBy,
   onSnapshot,
   updateDoc,
+  increment,
 } from 'firebase/firestore';
 import { UserProfile, Plot, PixelOrder, LeaderboardEntry } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -190,27 +191,31 @@ export async function createUserProfile(
 
 // Plots operations
 export async function savePlot(plot: Plot): Promise<void> {
+  const cleanPlot: Plot = {
+    ...plot,
+    ownerPhotoURL: plot.ownerPhotoURL || '',
+    linkUrl: plot.linkUrl || '',
+  };
+  const plotRef = doc(db, 'plots', plot.id);
+  await setDoc(plotRef, cleanPlot);
+
+  // Update user stats in Firestore
   try {
-    const cleanPlot: Plot = {
-      ...plot,
-      ownerPhotoURL: plot.ownerPhotoURL || '',
-      linkUrl: plot.linkUrl || '',
-    };
-    const plotRef = doc(db, 'plots', plot.id);
-    await setDoc(plotRef, cleanPlot);
-
-    // Update user stats
     const userRef = doc(db, 'users', plot.ownerId);
-    const userSnap = await getDoc(userRef);
-    if (userSnap.exists()) {
-      const current = userSnap.data() as UserProfile;
-      await updateDoc(userRef, {
-        totalPixelsBought: (current.totalPixelsBought || 0) + plot.pixelCount,
-        totalSpent: (current.totalSpent || 0) + plot.pricePaid,
-      });
-    }
+    await setDoc(
+      userRef,
+      {
+        totalPixelsBought: increment(plot.pixelCount),
+        totalSpent: increment(plot.pricePaid),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Notice updating user stats:', err);
+  }
 
-    // Record order
+  // Record order
+  try {
     const orderId = 'order_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const orderRef = doc(db, 'orders', orderId);
     const order: PixelOrder = {
@@ -220,13 +225,13 @@ export async function savePlot(plot: Plot): Promise<void> {
       plotId: plot.id,
       pixelCount: plot.pixelCount,
       amount: plot.pricePaid,
-      paymentMethod: 'Demo Payment (Instant Simulated Checkout)',
+      paymentMethod: 'Instant Canvas Purchase',
       status: 'completed',
       timestamp: Date.now(),
     };
     await setDoc(orderRef, order);
   } catch (err) {
-    console.warn('Notice saving plot to Firestore (local canvas state active):', err);
+    console.warn('Notice recording order:', err);
   }
 }
 
@@ -237,18 +242,18 @@ export async function updatePlotArtworkAndNote(
   note: string,
   linkUrl?: string
 ): Promise<void> {
-  try {
-    const plotRef = doc(db, 'plots', plotId);
-    await updateDoc(plotRef, {
+  const plotRef = doc(db, 'plots', plotId);
+  await setDoc(
+    plotRef,
+    {
       pixels,
       title,
       note,
       linkUrl: linkUrl || '',
       updatedAt: Date.now(),
-    });
-  } catch (err) {
-    console.warn('Notice updating plot artwork in Firestore (local state updated):', err);
-  }
+    },
+    { merge: true }
+  );
 }
 
 export function subscribePlots(callback: (plots: Plot[]) => void): () => void {

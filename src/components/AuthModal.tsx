@@ -193,7 +193,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                   onClick={handleDemoEmailSignIn}
                   className="bg-[#A388EE] hover:bg-purple-300 text-black border-[2px] border-black shadow-[2px_2px_0px_#000] px-3 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-all"
                 >
-                  <span>Continue with this email in Demo Mode</span>
+                  <span>Continue with this email account</span>
                   <ArrowRight className="w-3 h-3" />
                 </button>
               </div>
