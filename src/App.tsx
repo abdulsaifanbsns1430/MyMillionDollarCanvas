@@ -26,6 +26,7 @@ import {
   subscribePlots,
   savePlot,
   updatePlotArtworkAndNote,
+  AppUser,
 } from './lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import {
@@ -36,7 +37,7 @@ import {
 
 export default function App() {
   // Auth state
-  const [rawUser, setRawUser] = useState<FirebaseUser | null>(null);
+  const [rawUser, setRawUser] = useState<FirebaseUser | AppUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -127,6 +128,22 @@ export default function App() {
           setShowOnboarding(true);
         }
       } else {
+        // Fallback to active local guest/demo profile if present
+        const stored = localStorage.getItem('million_canvas_active_profile');
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored) as UserProfile;
+            setUserProfile(parsed);
+            setRawUser({
+              uid: parsed.uid,
+              displayName: parsed.displayName,
+              email: parsed.email || '',
+              photoURL: parsed.photoURL || '',
+            });
+            setShowOnboarding(false);
+            return;
+          } catch {}
+        }
         setRawUser(null);
         setUserProfile(null);
         setShowOnboarding(false);
@@ -331,9 +348,20 @@ export default function App() {
       {isAuthModalOpen && (
         <AuthModal
           onClose={() => setIsAuthModalOpen(false)}
-          onSuccess={(user) => {
+          onSuccess={async (user) => {
             setRawUser(user);
             setIsAuthModalOpen(false);
+            try {
+              const profile = await getUserProfile(user.uid);
+              if (profile) {
+                setUserProfile(profile);
+                setShowOnboarding(false);
+              } else {
+                setShowOnboarding(true);
+              }
+            } catch {
+              setShowOnboarding(true);
+            }
           }}
         />
       )}
