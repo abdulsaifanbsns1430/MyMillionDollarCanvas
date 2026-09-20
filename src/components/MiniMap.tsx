@@ -18,11 +18,11 @@ export const MiniMap: React.FC<MiniMapProps> = ({
   containerWidth,
   containerHeight,
 }) => {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(() => window.innerWidth > 768);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const miniMapSize = 130; // 130x130 px mini map
+  const miniMapSize = 120; // 120x120 px mini map
 
-  const scale = miniMapSize / CANVAS_WIDTH; // ~0.065
+  const scale = miniMapSize / CANVAS_WIDTH;
 
   // Render mini map
   useEffect(() => {
@@ -68,17 +68,17 @@ export const MiniMap: React.FC<MiniMapProps> = ({
     ctx.strokeRect(rX, rY, rW, rH);
   }, [plots, viewport, containerWidth, containerHeight, isExpanded, scale]);
 
-  const handleMiniMapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const teleportToPos = (clientX: number, clientY: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
+    const clickX = clientX - rect.left;
+    const clickY = clientY - rect.top;
 
     const targetWorldX = clickX / scale;
     const targetWorldY = clickY / scale;
 
-    // Center viewport around clicked target
+    // Center viewport around clicked/touched target
     onViewportChange({
       ...viewport,
       x: containerWidth / 2 - targetWorldX * viewport.zoom,
@@ -86,21 +86,35 @@ export const MiniMap: React.FC<MiniMapProps> = ({
     });
   };
 
+  const handleMiniMapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    teleportToPos(e.clientX, e.clientY);
+  };
+
+  const handleMiniMapTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length > 0) {
+      teleportToPos(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  };
+
   return (
     <div
       id="minimap-radar"
       className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-1 select-none"
     >
-      <div className="bg-white border-[2.5px] border-black shadow-[4px_4px_0px_#000] rounded-xl overflow-hidden">
+      <div className="bg-white border-[2px] sm:border-[2.5px] border-black shadow-[3px_3px_0px_#000] rounded-xl overflow-hidden">
         {/* Radar Header */}
         <div className="bg-[#FFE169] border-b-[2px] border-black px-2 py-1 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1 text-[11px] font-extrabold font-mono text-black uppercase">
-            <Compass className="w-3 h-3 text-black" />
-            <span>Radar (1000×1000)</span>
-          </div>
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="text-black hover:bg-black/10 p-0.5 rounded"
+            className="flex items-center gap-1 text-[10px] sm:text-[11px] font-extrabold font-mono text-black uppercase cursor-pointer"
+          >
+            <Compass className="w-3 h-3 text-black" />
+            <span>Radar</span>
+          </button>
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="text-black hover:bg-black/10 p-0.5 rounded cursor-pointer"
+            title={isExpanded ? 'Minimize radar' : 'Expand radar'}
           >
             {isExpanded ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
           </button>
@@ -113,11 +127,12 @@ export const MiniMap: React.FC<MiniMapProps> = ({
               width={miniMapSize}
               height={miniMapSize}
               onClick={handleMiniMapClick}
-              className="border border-black cursor-pointer rounded-sm"
-              title="Click anywhere to jump on the canvas"
+              onTouchStart={handleMiniMapTouch}
+              className="border border-black cursor-pointer rounded-sm touch-none"
+              title="Tap anywhere to jump on the canvas"
             />
             <div className="text-[9px] font-mono text-center text-gray-500 mt-1 font-bold">
-              CLICK TO TELEPORT
+              TAP TO TELEPORT
             </div>
           </div>
         )}

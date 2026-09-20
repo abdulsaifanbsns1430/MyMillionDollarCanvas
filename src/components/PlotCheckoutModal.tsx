@@ -19,7 +19,7 @@ interface PlotCheckoutModalProps {
   draftPixels: Map<string, string>;
   user: UserProfile;
   onClose: () => void;
-  onSuccess: (newPlot: Plot) => Promise<void>;
+  onSuccess: (newPlots: Plot[]) => Promise<void>;
 }
 
 export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
@@ -113,60 +113,46 @@ export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
         { id: '1', x: selection.x, y: selection.y, width: selection.width, height: selection.height, pixelCount: selection.pixelCount, cost: selection.cost }
       ];
 
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      regions.forEach((r) => {
-        minX = Math.min(minX, r.x);
-        minY = Math.min(minY, r.y);
-        maxX = Math.max(maxX, r.x + r.width);
-        maxY = Math.max(maxY, r.y + r.height);
-      });
-
-      const w = Math.max(1, maxX - minX);
-      const h = Math.max(1, maxY - minY);
-
-      // Build compact pixel array
-      const flatPixels: string[] = new Array(w * h).fill('#FAF8F5');
-      regions.forEach((r) => {
-        for (let py = r.y; py < r.y + r.height; py++) {
-          for (let px = r.x; px < r.x + r.width; px++) {
-            const key = `${px},${py}`;
-            const color = draftPixels.get(key) || '#FFE169';
-            const idx = (py - minY) * w + (px - minX);
-            flatPixels[idx] = color;
-          }
-        }
-      });
-
       const cleanLink = linkUrl.trim()
         ? linkUrl.trim().startsWith('http://') || linkUrl.trim().startsWith('https://')
           ? linkUrl.trim()
           : `https://${linkUrl.trim()}`
         : undefined;
 
-      const newPlot: Plot = {
-        id: `plot_${minX}_${minY}_${Date.now()}`,
-        ownerId: user.uid,
-        ownerUsername: user.username,
-        ownerProfileId: user.profileId,
-        ownerPhotoURL: user.photoURL,
-        x: minX,
-        y: minY,
-        width: w,
-        height: h,
-        pixelCount: totalPixels,
-        pricePaid: totalAmount,
-        title: title.trim(),
-        note: note.trim() || 'Claimed on Million Dollar Canvas',
-        linkUrl: cleanLink,
-        pixels: flatPixels,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
+      // Create individual plot for each selected region so non-selected areas in-between remain completely unowned & empty
+      const createdPlots: Plot[] = regions.map((r, idx) => {
+        const regionPixels: string[] = new Array(r.width * r.height);
+        for (let py = r.y; py < r.y + r.height; py++) {
+          for (let px = r.x; px < r.x + r.width; px++) {
+            const key = `${px},${py}`;
+            const color = draftPixels.get(key) || '#FFE169';
+            const localIdx = (py - r.y) * r.width + (px - r.x);
+            regionPixels[localIdx] = color;
+          }
+        }
 
-      await onSuccess(newPlot);
+        return {
+          id: `plot_${r.x}_${r.y}_${Date.now()}_${idx}`,
+          ownerId: user.uid,
+          ownerUsername: user.username,
+          ownerProfileId: user.profileId,
+          ownerPhotoURL: user.photoURL,
+          x: r.x,
+          y: r.y,
+          width: r.width,
+          height: r.height,
+          pixelCount: r.pixelCount,
+          pricePaid: r.cost,
+          title: regions.length > 1 ? `${title.trim()} (${idx + 1}/${regions.length})` : title.trim(),
+          note: note.trim() || 'Claimed on Million Dollar Canvas',
+          linkUrl: cleanLink,
+          pixels: regionPixels,
+          createdAt: Date.now() + idx,
+          updatedAt: Date.now() + idx,
+        };
+      });
+
+      await onSuccess(createdPlots);
     } catch (err: any) {
       console.error('Payment / Plot Claim error:', err);
       setErrorMsg(err.message || 'Payment failed. Please try again.');
@@ -187,7 +173,7 @@ export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg border-[2px] border-black bg-white hover:bg-red-50 text-black hover:text-red-600 transition-all hover:shadow-[2px_2px_0px_#000]"
+            className="p-1 rounded-lg border-[2px] border-black bg-white hover:bg-red-50 text-black hover:text-red-600 transition-all hover:shadow-[2px_2px_0px_#000] cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>

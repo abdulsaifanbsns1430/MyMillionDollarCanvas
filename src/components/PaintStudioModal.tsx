@@ -185,6 +185,17 @@ export const PaintStudioModal: React.FC<PaintStudioModalProps> = ({
     return { px, py };
   };
 
+  const getTouchCanvasCoords = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas || e.touches.length === 0) return { px: -1, py: -1 };
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.touches[0].clientX - rect.left;
+    const cy = e.touches[0].clientY - rect.top;
+    const px = Math.floor(cx / cellSize);
+    const py = Math.floor(cy / cellSize);
+    return { px, py };
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     isPaintingRef.current = true;
     const { px, py } = getCanvasCoords(e);
@@ -210,6 +221,37 @@ export const PaintStudioModal: React.FC<PaintStudioModalProps> = ({
     if (isPaintingRef.current) {
       isPaintingRef.current = false;
       // Commit state after continuous drag
+      pushState(pixels);
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    isPaintingRef.current = true;
+    const { px, py } = getTouchCanvasCoords(e);
+    applyPixelAction(px, py);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!isPaintingRef.current) return;
+    if (selectedTool !== 'pencil' && selectedTool !== 'eraser') return;
+    const { px, py } = getTouchCanvasCoords(e);
+    if (px < 0 || px >= plot.width || py < 0 || py >= plot.height) return;
+
+    const targetIdx = py * plot.width + px;
+    const drawColor = selectedTool === 'eraser' ? '#FAF8F5' : selectedColor;
+    if (pixels[targetIdx] !== drawColor) {
+      const updated = [...pixels];
+      updated[targetIdx] = drawColor;
+      setPixels(updated);
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (isPaintingRef.current) {
+      isPaintingRef.current = false;
       pushState(pixels);
     }
   };
@@ -361,7 +403,11 @@ export const PaintStudioModal: React.FC<PaintStudioModalProps> = ({
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
-                className="cursor-crosshair border border-black"
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onTouchCancel={handleTouchEnd}
+                className="cursor-crosshair border border-black touch-none select-none"
                 style={{ imageRendering: 'pixelated' }}
               />
             </div>

@@ -740,6 +740,40 @@ export function mapImageToDraftPixels(
   });
 }
 
+// Bresenham's line algorithm for continuous stroke painting
+export function getLinePixels(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number
+): Array<{ x: number; y: number }> {
+  const points: Array<{ x: number; y: number }> = [];
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+
+  let curX = x0;
+  let curY = y0;
+
+  while (true) {
+    points.push({ x: curX, y: curY });
+    if (curX === x1 && curY === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      curX += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      curY += sy;
+    }
+  }
+
+  return points;
+}
+
 // Empty initial plots for a clean, fresh, real collaborative canvas
 export function getInitialSeedPlots(): Plot[] {
   return [];

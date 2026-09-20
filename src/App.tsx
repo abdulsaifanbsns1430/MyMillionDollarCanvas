@@ -338,19 +338,24 @@ export default function App() {
   };
 
   // Purchase Complete Callback
-  const handlePurchaseSuccess = async (newPlot: Plot) => {
+  const handlePurchaseSuccess = async (newPlotsInput: Plot | Plot[]) => {
+    const plotList = Array.isArray(newPlotsInput) ? newPlotsInput : [newPlotsInput];
     try {
-      // 1. Save plot to Firestore
-      await savePlot(newPlot);
+      // 1. Save all plots to Firestore
+      for (const plot of plotList) {
+        await savePlot(plot);
+      }
 
       // 2. Update local plots
-      setPlots((prev) => [...prev, newPlot]);
+      setPlots((prev) => [...prev, ...plotList]);
 
       if (userProfile) {
+        const addedPixels = plotList.reduce((acc, p) => acc + p.pixelCount, 0);
+        const addedSpent = plotList.reduce((acc, p) => acc + p.pricePaid, 0);
         setUserProfile({
           ...userProfile,
-          totalPixelsBought: (userProfile.totalPixelsBought || 0) + newPlot.pixelCount,
-          totalSpent: (userProfile.totalSpent || 0) + newPlot.pricePaid,
+          totalPixelsBought: (userProfile.totalPixelsBought || 0) + addedPixels,
+          totalSpent: (userProfile.totalSpent || 0) + addedSpent,
         });
       }
 
@@ -361,8 +366,8 @@ export default function App() {
       setInspectCoord(null);
       setStep('idle');
     } catch (err) {
-      console.error('Error saving new plot to Firebase:', err);
-      setPlots((prev) => [...prev, newPlot]);
+      console.error('Error saving new plots to Firebase:', err);
+      setPlots((prev) => [...prev, ...plotList]);
       setIsCheckoutModalOpen(false);
       setSelection(null);
       setDraftPixels(new Map());
