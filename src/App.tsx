@@ -127,11 +127,11 @@ export default function App() {
         setRawUser(fbUser);
         try {
           const profile = await getUserProfile(fbUser.uid);
-          if (profile) {
+          if (profile && profile.username) {
             setUserProfile(profile);
             setShowOnboarding(false);
           } else {
-            // User successfully authenticated for the first time -> prompt onboarding modal
+            // User authenticated for the first time -> prompt onboarding profile & password modal
             setShowOnboarding(true);
           }
         } catch (err) {
@@ -146,9 +146,12 @@ export default function App() {
             const parsed = JSON.parse(storedUser);
             setRawUser(parsed);
             const profile = await getUserProfile(parsed.uid);
-            if (profile) {
+            if (profile && profile.username) {
               setUserProfile(profile);
               setShowOnboarding(false);
+              return;
+            } else {
+              setShowOnboarding(true);
               return;
             }
           }
@@ -355,7 +358,7 @@ export default function App() {
             setIsAuthModalOpen(false);
             try {
               const profile = await getUserProfile(user.uid);
-              if (profile) {
+              if (profile && profile.username) {
                 setUserProfile(profile);
                 setShowOnboarding(false);
               } else {

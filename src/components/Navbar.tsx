@@ -180,10 +180,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             id="btn-nav-login"
             onClick={onLogin}
-            className="bg-[#FF6B6B] hover:bg-red-400 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2.5px_2.5px_0px_#000] px-3.5 py-1.5 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform"
+            className="bg-[#FFE169] hover:bg-yellow-300 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2.5px_2.5px_0px_#000] px-3.5 py-1.5 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform cursor-pointer"
           >
             <LogIn className="w-3.5 h-3.5" />
-            <span>Sign In with Google</span>
+            <span>Sign In / Register</span>
           </button>
         )}
       </div>

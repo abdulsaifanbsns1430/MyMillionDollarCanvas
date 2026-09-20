@@ -17,12 +17,14 @@ import {
   Check,
   RotateCw,
   Info,
+  ShieldAlert,
+  UserPlus,
 } from 'lucide-react';
 import {
   signInWithGoogle,
-  signInGuest,
   sendEmailOTP,
   verifyEmailOTP,
+  checkAccountExists,
   AppUser,
 } from '../lib/firebase';
 import { User as FirebaseUser } from 'firebase/auth';
@@ -38,7 +40,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  
+
   // 6-digit OTP state
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [generatedOtp, setGeneratedOtp] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showDomainHelp, setShowDomainHelp] = useState(false);
 
   // References for OTP inputs to handle auto-focus
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -70,16 +73,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     }
   }, [step]);
 
-  // Step 1: Submit email & password to generate OTP
+  // Step 1: Submit credentials (Email for Signup, Email + Password for Signin)
   const handleCredentialsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanEmail = email.trim();
-    if (!cleanEmail || !password) {
-      setErrorMsg('Please enter both your email address and password.');
-      return;
-    }
-    if (password.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long.');
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMsg('Please enter a valid email address.');
       return;
     }
 
@@ -88,14 +88,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     setSuccessMsg(null);
 
     try {
-      const result = await sendEmailOTP(cleanEmail, password, tab);
-      setGeneratedOtp(result.otp);
-      setSuccessMsg(result.message);
-      setResendCooldown(60);
-      setStep('otp');
-      setOtpDigits(['', '', '', '', '', '']);
+      if (tab === 'signup') {
+        // Sign-up check: Ensure email is not already registered
+        const alreadyRegistered = await checkAccountExists(cleanEmail);
+        if (alreadyRegistered) {
+          setErrorMsg(
+            'This email address is already registered. You cannot create a duplicate account with this email. Please switch to Sign In.'
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        // Trigger real email OTP send (Password will be set during username/profile setup)
+        const result = await sendEmailOTP(cleanEmail, 'signup');
+        setGeneratedOtp(result.otp);
+        setSuccessMsg(`Verification code sent to ${cleanEmail}`);
+        setResendCooldown(result.cooldownSeconds || 60);
+        setStep('otp');
+        setOtpDigits(['', '', '', '', '', '']);
+      } else {
+        // Sign-in check: Password is required for existing accounts
+        if (!password) {
+          setErrorMsg('Please enter your account password.');
+          setIsLoading(false);
+          return;
+        }
+
+        // Verify account exists & password is correct, then trigger OTP
+        const result = await sendEmailOTP(cleanEmail, 'signin', password);
+        setGeneratedOtp(result.otp);
+        setSuccessMsg(`Verification code sent to ${cleanEmail}`);
+        setResendCooldown(result.cooldownSeconds || 60);
+        setStep('otp');
+        setOtpDigits(['', '', '', '', '', '']);
+      }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Unable to proceed with email authentication.');
+      setErrorMsg(err.message || 'Authentication error. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -103,7 +131,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
 
   // Step 2: Handle OTP input changes & auto-advance
   const handleOtpChange = (index: number, val: string) => {
-    // Only accept numbers
     const cleanVal = val.replace(/[^0-9]/g, '');
     if (!cleanVal && val !== '') return;
 
@@ -111,7 +138,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     newDigits[index] = cleanVal.slice(-1);
     setOtpDigits(newDigits);
 
-    // Auto-advance to next input
     if (cleanVal && index < 5) {
       inputRefs.current[index + 1]?.focus();
     }
@@ -139,7 +165,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     inputRefs.current[nextIndex]?.focus();
   };
 
-  // Auto-fill OTP button
+  // Auto-fill OTP button for dev/testing convenience
   const handleAutoFillOtp = () => {
     if (!generatedOtp || generatedOtp.length !== 6) return;
     const split = generatedOtp.split('');
@@ -161,14 +187,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const result = await sendEmailOTP(email.trim(), password, tab);
+      const result = await sendEmailOTP(email.trim().toLowerCase(), tab, password || undefined);
       setGeneratedOtp(result.otp);
-      setSuccessMsg('A new OTP has been dispatched to your email.');
-      setResendCooldown(60);
+      setSuccessMsg('A new verification code has been dispatched to your email.');
+      setResendCooldown(result.cooldownSeconds || 60);
       setOtpDigits(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to resend OTP.');
+      setErrorMsg(err.message || 'Failed to resend verification code.');
     } finally {
       setIsLoading(false);
     }
@@ -187,20 +213,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     setErrorMsg(null);
 
     try {
-      const user = await verifyEmailOTP(email.trim(), enteredCode, password, tab);
+      const user = await verifyEmailOTP(email.trim().toLowerCase(), enteredCode, tab, password);
       onSuccess(user);
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Verification failed. Please try again.');
+      setErrorMsg(err.message || 'Verification failed. Please check the code and try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Google Sign-In handler
+  // Google Sign-In with friendly domain handling
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
     setErrorMsg(null);
+    setShowDomainHelp(false);
+
     try {
       const user = await signInWithGoogle();
       if (user) {
@@ -208,38 +236,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         onClose();
       }
     } catch (err: any) {
-      console.warn('Google sign-in status:', err);
-      if (err.code === 'auth/popup-blocked') {
+      console.warn('Google sign-in error:', err);
+      if (err.code === 'auth/unauthorized-domain') {
+        setShowDomainHelp(true);
+        setErrorMsg(
+          `Firebase Google Sign-In requires "${window.location.hostname}" to be whitelisted under Authorized Domains in your Firebase Console. Please use Email + OTP login below which works on all devices and domains!`
+        );
+      } else if (err.code === 'auth/popup-blocked') {
         setErrorMsg('Sign-in popup was blocked by your browser. Please allow popups or use Email + OTP login below.');
       } else if (err.code === 'auth/popup-closed-by-user') {
-        setErrorMsg('Sign-in popup was closed. Click Continue with Google to try again or use Email + OTP below.');
+        setErrorMsg('Sign-in was cancelled. Click Continue with Google to try again or use Email + OTP.');
       } else {
-        setErrorMsg(err.message || 'Google sign-in could not be completed.');
+        setErrorMsg(err.message || 'Google sign-in could not be completed. Please use Email + OTP.');
       }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Instant Guest Testing Mode
-  const handleInstantSignIn = async () => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const user = await signInGuest();
-      onSuccess(user);
-      onClose();
-    } catch (err: any) {
-      console.warn('Guest sign-in notice:', err);
-      const fallbackUser: AppUser = {
-        uid: 'guest_' + Date.now(),
-        displayName: 'Guest Artist',
-        email: null,
-        photoURL: null,
-        isAnonymous: true,
-      };
-      onSuccess(fallbackUser);
-      onClose();
     } finally {
       setIsLoading(false);
     }
@@ -258,18 +267,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
             <div className="bg-[#FFE169] border-[2px] border-black shadow-[2px_2px_0px_#000] p-2 rounded-xl">
               {step === 'otp' ? (
                 <KeyRound className="w-5 h-5 text-black" />
+              ) : tab === 'signup' ? (
+                <UserPlus className="w-5 h-5 text-black" />
               ) : (
                 <LogIn className="w-5 h-5 text-black" />
               )}
             </div>
             <div>
               <h2 className="font-extrabold text-lg sm:text-xl font-mono text-black uppercase">
-                {step === 'otp' ? 'VERIFY EMAIL OTP' : 'SIGN IN TO CANVAS'}
+                {step === 'otp'
+                  ? 'VERIFY EMAIL CODE'
+                  : tab === 'signup'
+                  ? 'CREATE ARTIST ACCOUNT'
+                  : 'SIGN IN TO CANVAS'}
               </h2>
               <p className="text-xs text-gray-600 font-mono">
                 {step === 'otp'
-                  ? 'Confirm your 6-digit one-time password'
-                  : 'Claim pixels, paint artwork & track your plots'}
+                  ? 'Enter the 6-digit passcode sent to your email'
+                  : tab === 'signup'
+                  ? 'Sign up with email to claim canvas territory'
+                  : 'Enter your credentials to access your plots'}
               </p>
             </div>
           </div>
@@ -285,9 +302,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         {errorMsg && (
           <div className="mb-4 bg-red-50 border-[2px] border-red-800 text-red-900 text-xs font-bold p-3 rounded-xl flex items-start gap-2 animate-in fade-in duration-200">
             <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-            <div className="flex-1">
+            <div className="flex-1 space-y-1">
               <span>{errorMsg}</span>
+              {errorMsg.includes('already registered') && tab === 'signup' && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTab('signin');
+                      setErrorMsg(null);
+                    }}
+                    className="underline text-black font-extrabold hover:text-red-950 cursor-pointer"
+                  >
+                    → Click here to Switch to Sign In
+                  </button>
+                </div>
+              )}
+              {errorMsg.includes('No account found') && tab === 'signin' && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTab('signup');
+                      setErrorMsg(null);
+                    }}
+                    className="underline text-black font-extrabold hover:text-red-950 cursor-pointer"
+                  >
+                    → Click here to Create New Account
+                  </button>
+                </div>
+              )}
             </div>
+          </div>
+        )}
+
+        {/* Domain Whitelist Instructions */}
+        {showDomainHelp && (
+          <div className="mb-4 bg-amber-50 border-[2px] border-amber-800 text-amber-900 text-xs p-3 rounded-xl space-y-1.5 font-mono">
+            <div className="flex items-center gap-1.5 font-bold">
+              <ShieldAlert className="w-4 h-4 text-amber-700" />
+              <span>How to Enable Google Sign-In on this Domain:</span>
+            </div>
+            <p className="text-[11px] text-gray-700">
+              In Firebase Console → Authentication → Settings → Authorized Domains, add:
+            </p>
+            <code className="block bg-white p-1.5 rounded border border-amber-300 font-bold select-all text-black">
+              {window.location.hostname}
+            </code>
+            <p className="text-[10px] text-gray-600">
+              Email + OTP login works right now without any domain restrictions!
+            </p>
           </div>
         )}
 
@@ -302,11 +366,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         )}
 
         {/* ========================================================= */}
-        {/* STEP 1: CREDENTIALS (Email & Password) */}
+        {/* STEP 1: CREDENTIALS (Sign In vs Create Account) */}
         {/* ========================================================= */}
         {step === 'credentials' ? (
           <div>
-            {/* Tab Switcher: Sign In vs Create Account */}
+            {/* Tab Switcher */}
             <div className="flex bg-gray-200 border-[2px] border-black rounded-xl p-1 mb-4">
               <button
                 type="button"
@@ -340,11 +404,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               </button>
             </div>
 
-            {/* Email & Password Form */}
+            {/* Credential Form */}
             <form onSubmit={handleCredentialsSubmit} className="space-y-3.5 mb-4">
               <div>
                 <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
-                  Email Address
+                  Email Address *
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
@@ -357,32 +421,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                     className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
                   />
                 </div>
+                {tab === 'signup' && (
+                  <p className="text-[10px] text-gray-500 font-mono mt-1">
+                    We will send a real 6-digit OTP code to verify your email. Password is set on the next screen.
+                  </p>
+                )}
               </div>
 
-              <div>
-                <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimum 6 characters"
-                    className="w-full pl-9 pr-9 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-gray-500 hover:text-black cursor-pointer"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+              {/* Password field: ONLY shown on Sign In for security */}
+              {tab === 'signin' && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-extrabold font-mono uppercase text-black">
+                      Account Password *
+                    </label>
+                    <span className="text-[10px] font-mono text-gray-500">Required</span>
+                  </div>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter your account password"
+                      className="w-full pl-9 pr-9 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-2.5 text-gray-500 hover:text-black cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               <button
                 id="btn-auth-email-otp"
@@ -393,14 +468,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Generating Security OTP...</span>
+                    <span>Processing & Dispatching Code...</span>
                   </>
                 ) : (
                   <>
                     <span>
                       {tab === 'signin'
-                        ? 'Continue to Email OTP'
-                        : 'Create Account & Send OTP'}
+                        ? 'Sign In & Send Security OTP'
+                        : 'Send Verification Code'}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </>
@@ -414,7 +489,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 <div className="w-full border-t border-black/20" />
               </div>
               <div className="relative flex justify-center text-[10px] uppercase font-mono font-bold">
-                <span className="bg-[#FAF8F5] px-2 text-gray-500">Other Sign-In Options</span>
+                <span className="bg-[#FAF8F5] px-2 text-gray-500">Or continue with Google</span>
               </div>
             </div>
 
@@ -424,7 +499,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               type="button"
               disabled={isLoading}
               onClick={handleGoogleSignIn}
-              className="w-full mb-3 bg-white hover:bg-yellow-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] py-2.5 px-4 rounded-xl font-black text-xs text-black flex items-center justify-center gap-2.5 transition-all cursor-pointer"
+              className="w-full bg-white hover:bg-yellow-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] py-2.5 px-4 rounded-xl font-black text-xs text-black flex items-center justify-center gap-2.5 transition-all cursor-pointer"
             >
               <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                 <path
@@ -446,18 +521,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               </svg>
               <span>Continue with Google</span>
             </button>
-
-            {/* Instant Sandbox Guest Mode */}
-            <button
-              id="btn-auth-guest"
-              type="button"
-              disabled={isLoading}
-              onClick={handleInstantSignIn}
-              className="w-full bg-[#A388EE]/30 hover:bg-[#A388EE]/50 border-[2px] border-black shadow-[2px_2px_0px_#000] py-2 px-3 rounded-xl text-xs font-black text-black flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-            >
-              <Zap className="w-3.5 h-3.5 text-purple-700" />
-              <span>Explore as Instant Guest Artist</span>
-            </button>
           </div>
         ) : (
           /* ========================================================= */
@@ -475,10 +538,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 className="flex items-center gap-1 text-xs font-bold text-gray-700 hover:text-black cursor-pointer font-mono"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Edit email or password</span>
+                <span>Edit email {tab === 'signin' ? 'or password' : ''}</span>
               </button>
               <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded border border-amber-300">
-                Step 2 of 2
+                Email OTP
               </span>
             </div>
 
@@ -487,17 +550,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[10px] font-black font-mono uppercase tracking-wider text-black flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                  Email OTP Security Dispatch
+                  Verification Dispatch Active
                 </span>
                 <span className="text-[9px] font-mono bg-white px-1.5 py-0.5 rounded border border-black font-bold">
-                  Sent to {email}
+                  {email}
                 </span>
               </div>
 
               {generatedOtp && (
                 <div className="bg-white border-[2px] border-black rounded-lg p-2.5 flex items-center justify-between gap-2 mt-2">
                   <div>
-                    <div className="text-[10px] text-gray-600 font-mono">Your 6-Digit Passcode:</div>
+                    <div className="text-[10px] text-gray-600 font-mono">6-Digit Code:</div>
                     <div className="text-xl font-black font-mono tracking-widest text-black">
                       {generatedOtp}
                     </div>
@@ -528,7 +591,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               )}
 
               <p className="text-[10px] text-gray-600 font-mono mt-2">
-                Stored in secure Firebase verification collection. Code expires in 10 minutes.
+                Code expires in 10 minutes. Enter the code below to proceed.
               </p>
             </div>
 
@@ -557,7 +620,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 </div>
               </div>
 
-              {/* Verify & Sign In Button */}
+              {/* Verify Button */}
               <button
                 id="btn-verify-otp"
                 type="submit"
@@ -572,7 +635,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 ) : (
                   <>
                     <CheckCircle className="w-4 h-4" />
-                    <span>Verify & Sign In to Canvas</span>
+                    <span>
+                      {tab === 'signup'
+                        ? 'Verify Email & Setup Profile'
+                        : 'Verify & Sign In to Canvas'}
+                    </span>
                   </>
                 )}
               </button>
@@ -601,7 +668,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         {/* Small informational footer */}
         <div className="mt-4 pt-3 border-t border-black/10 flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
           <Info className="w-3 h-3 shrink-0 text-gray-400" />
-          <span>Real-time persistence powered by Firebase Firestore.</span>
+          <span>Real-time authenticated state with Firebase Cloud Firestore.</span>
         </div>
       </div>
     </div>

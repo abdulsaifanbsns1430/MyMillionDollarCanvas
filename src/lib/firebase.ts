@@ -28,6 +28,11 @@ import {
 } from 'firebase/firestore';
 import { UserProfile, Plot, PixelOrder, LeaderboardEntry } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
+import {
+  validateEmailAddress,
+  triggerEmailOtpSend,
+  verifyEmailOtpCode,
+} from './emailOtpService';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
@@ -75,205 +80,118 @@ export interface SendOTPResult {
   otp: string;
   isNewAccount: boolean;
   message: string;
+  cooldownSeconds?: number;
 }
 
-// Generates & dispatches 6-digit OTP for Email ID login
-export async function sendEmailOTP(
-  email: string,
-  password: string,
-  mode: 'signin' | 'signup'
-): Promise<SendOTPResult> {
+// Check whether an account exists for this email
+export async function checkAccountExists(email: string): Promise<boolean> {
   const cleanEmail = email.trim().toLowerCase();
-  if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-    throw new Error('Please enter a valid email address.');
-  }
-  if (!password || password.length < 6) {
-    throw new Error('Password must be at least 6 characters.');
-  }
-
-  let isNew = false;
   try {
     const accountRef = doc(db, 'auth_accounts', cleanEmail);
-    const accountSnap = await getDoc(accountRef);
-
-    if (mode === 'signin') {
-      if (accountSnap.exists()) {
-        const acc = accountSnap.data();
-        const computedHash = await hashPassword(password, acc.salt || 'salt');
-        if (computedHash !== acc.passwordHash) {
-          throw new Error('Incorrect password. Please verify your password and try again.');
-        }
-      } else {
-        // First-time sign in with this email
-        isNew = true;
-      }
-    } else {
-      if (accountSnap.exists()) {
-        isNew = false;
-      } else {
-        isNew = true;
-      }
-    }
-  } catch (err: any) {
-    if (err.message && err.message.includes('Incorrect password')) {
-      throw err;
-    }
-    console.warn('Notice checking account in Firestore:', err);
-  }
-
-  // Generate 6-digit OTP code
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-
-  // Persist OTP record in Firestore
-  try {
-    const otpRef = doc(db, 'email_otps', cleanEmail);
-    await setDoc(otpRef, {
-      email: cleanEmail,
-      otp,
-      expiresAt,
-      createdAt: Date.now(),
-      attempts: 0,
-    });
+    const snap = await getDoc(accountRef);
+    return snap.exists();
   } catch (err) {
-    console.warn('Notice writing OTP to Firestore:', err);
+    console.warn('Notice checking account existence:', err);
+    return false;
+  }
+}
+
+// Verifies account password against stored salt and hash
+export async function verifyAccountPassword(
+  email: string,
+  password: string
+): Promise<{ uid: string; email: string }> {
+  const cleanEmail = email.trim().toLowerCase();
+  const accountRef = doc(db, 'auth_accounts', cleanEmail);
+  const snap = await getDoc(accountRef);
+  if (!snap.exists()) {
+    throw new Error('No account found with this email address. Please switch to Create Account.');
+  }
+  const data = snap.data();
+  const computedHash = await hashPassword(password, data.salt || 'salt');
+  if (computedHash !== data.passwordHash) {
+    throw new Error('Incorrect password. Please verify your password and try again.');
+  }
+  return { uid: data.uid, email: cleanEmail };
+}
+
+// Dispatches 6-digit OTP for Email ID login using emailOtpService
+export async function sendEmailOTP(
+  email: string,
+  mode: 'signin' | 'signup',
+  password?: string
+): Promise<SendOTPResult> {
+  const cleanEmail = email.trim().toLowerCase();
+  const validation = validateEmailAddress(cleanEmail);
+  if (!validation.isValid) {
+    throw new Error(validation.error || 'Please enter a valid email address.');
   }
 
-  // Cache in session storage for instant client delivery
-  try {
-    sessionStorage.setItem(`canvas_otp_${cleanEmail}`, JSON.stringify({ otp, expiresAt }));
-  } catch {}
+  // If signing in, verify password first
+  if (mode === 'signin') {
+    if (!password) {
+      throw new Error('Please enter your account password.');
+    }
+    await verifyAccountPassword(cleanEmail, password);
+  } else if (mode === 'signup') {
+    // Ensure email is not already registered
+    const exists = await checkAccountExists(cleanEmail);
+    if (exists) {
+      throw new Error(
+        'This email address is already registered. You cannot sign up again with this email. Please switch to Sign In.'
+      );
+    }
+  }
 
-  console.info(`[Canvas Auth] OTP for ${cleanEmail}: ${otp}`);
+  // Trigger authoritative OTP email send event
+  const dispatch = await triggerEmailOtpSend(cleanEmail, mode);
 
   return {
     success: true,
-    otp,
-    isNewAccount: isNew,
-    message: `Verification code generated for ${cleanEmail}`,
+    otp: dispatch.otp || '',
+    isNewAccount: mode === 'signup',
+    message: dispatch.message,
+    cooldownSeconds: dispatch.cooldownSeconds,
   };
 }
 
-// Verifies 6-digit OTP and logs in / creates account
+// Verifies 6-digit OTP and authenticates user
 export async function verifyEmailOTP(
   email: string,
   enteredOtp: string,
-  password: string,
-  mode: 'signin' | 'signup'
+  mode: 'signin' | 'signup',
+  password?: string
 ): Promise<AppUser> {
   const cleanEmail = email.trim().toLowerCase();
-  const cleanOtp = enteredOtp.trim().replace(/\s+/g, '');
+  
+  // Verify code with authoritative service
+  await verifyEmailOtpCode(cleanEmail, enteredOtp);
 
-  if (cleanOtp.length !== 6) {
-    throw new Error('Please enter the complete 6-digit OTP code.');
-  }
-
-  let verified = false;
-
-  // 1. Check Firestore email_otps
-  try {
-    const otpRef = doc(db, 'email_otps', cleanEmail);
-    const otpSnap = await getDoc(otpRef);
-    if (otpSnap.exists()) {
-      const data = otpSnap.data();
-      if (Date.now() > data.expiresAt) {
-        throw new Error('This verification OTP has expired. Please request a new code.');
-      }
-      if (data.otp === cleanOtp) {
-        verified = true;
-        // Clean up used OTP
-        await deleteDoc(otpRef).catch(() => {});
-      }
-    }
-  } catch (err: any) {
-    if (err.message && (err.message.includes('expired') || err.message.includes('complete'))) {
-      throw err;
-    }
-  }
-
-  // 2. Fallback check from session cache
-  if (!verified) {
-    try {
-      const stored = sessionStorage.getItem(`canvas_otp_${cleanEmail}`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Date.now() <= parsed.expiresAt && parsed.otp === cleanOtp) {
-          verified = true;
-          sessionStorage.removeItem(`canvas_otp_${cleanEmail}`);
-        }
-      }
-    } catch {}
-  }
-
-  if (!verified) {
-    throw new Error('Invalid OTP code. Please enter the correct 6-digit code or request a new one.');
-  }
-
-  // Account creation or retrieval
   let uid = '';
+  let profile: UserProfile | null = null;
   const accountRef = doc(db, 'auth_accounts', cleanEmail);
-  try {
+
+  if (mode === 'signin') {
+    // Existing account
     const accSnap = await getDoc(accountRef);
     if (accSnap.exists()) {
       const acc = accSnap.data();
       uid = acc.uid;
       await updateDoc(accountRef, { lastLoginAt: Date.now() }).catch(() => {});
+      profile = await getUserProfile(uid);
     } else {
-      uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-      const salt = Math.random().toString(36).substring(2, 8);
-      const passwordHash = await hashPassword(password, salt);
-      await setDoc(accountRef, {
-        uid,
-        email: cleanEmail,
-        passwordHash,
-        salt,
-        createdAt: Date.now(),
-        lastLoginAt: Date.now(),
-      });
+      throw new Error('Account record not found. Please create an account.');
     }
-  } catch (err) {
-    console.warn('Notice saving auth account to Firestore:', err);
-    if (!uid) {
-      uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-    }
-  }
-
-  // Retrieve or create User Profile
-  let profile: UserProfile | null = null;
-  try {
-    const userRef = doc(db, 'users', uid);
-    const userSnap = await getDoc(userRef);
-    if (userSnap.exists()) {
-      profile = userSnap.data() as UserProfile;
-    } else {
-      const rawName = cleanEmail.split('@')[0];
-      const baseUsername =
-        rawName.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() ||
-        'artist' + Math.floor(100 + Math.random() * 900);
-      const profileId = '#PX-' + Math.floor(1000 + Math.random() * 9000);
-      profile = {
-        uid,
-        username: baseUsername,
-        profileId,
-        displayName: rawName.charAt(0).toUpperCase() + rawName.slice(1),
-        email: cleanEmail,
-        photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${baseUsername}`,
-        totalPixelsBought: 0,
-        totalSpent: 0,
-        createdAt: Date.now(),
-      };
-      await setDoc(userRef, profile);
-      await setDoc(doc(db, 'usernames', baseUsername), { uid }).catch(() => {});
-    }
-  } catch (err) {
-    console.warn('Notice loading user profile:', err);
+  } else {
+    // New account signup - generate unique UID and prepare for onboarding
+    uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   }
 
   const appUser: AppUser = {
     uid,
-    displayName: profile?.displayName || cleanEmail.split('@')[0],
+    displayName: profile?.displayName || null,
     email: cleanEmail,
-    photoURL: profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
+    photoURL: profile?.photoURL || null,
     isAnonymous: false,
   };
 
@@ -282,6 +200,8 @@ export async function verifyEmailOTP(
     localStorage.setItem('million_canvas_active_user', JSON.stringify(appUser));
     if (profile) {
       localStorage.setItem('million_canvas_active_profile', JSON.stringify(profile));
+    } else {
+      localStorage.removeItem('million_canvas_active_profile');
     }
   } catch {}
 
@@ -340,17 +260,20 @@ export async function logOut(): Promise<void> {
 }
 
 // User Profile management
-export async function checkUsernameAvailable(username: string): Promise<boolean> {
+export async function checkUsernameAvailable(username: string, currentUid?: string): Promise<boolean> {
   const cleanUsername = username.trim().toLowerCase();
   if (!cleanUsername || cleanUsername.length < 3) return false;
   
   try {
     const usernameRef = doc(db, 'usernames', cleanUsername);
     const snap = await getDoc(usernameRef);
-    return !snap.exists();
+    if (!snap.exists()) return true;
+    const data = snap.data();
+    if (currentUid && data?.uid === currentUid) return true;
+    return false;
   } catch (err) {
-    console.warn('Notice checking username in Firestore, allowing for fallback:', err);
-    return true;
+    console.warn('Notice checking username in Firestore:', err);
+    return false;
   }
 }
 
@@ -390,6 +313,7 @@ export async function createUserProfile(
     email?: string;
     photoURL?: string;
     bio?: string;
+    password?: string;
   }
 ): Promise<UserProfile> {
   const cleanUsername = data.username.trim().toLowerCase();
@@ -411,7 +335,7 @@ export async function createUserProfile(
   } catch {}
 
   try {
-    // 1. Reserve username document
+    // 1. Reserve username document (guarantees unique username)
     const usernameRef = doc(db, 'usernames', cleanUsername);
     await setDoc(usernameRef, {
       uid,
@@ -421,7 +345,31 @@ export async function createUserProfile(
 
     // 2. Save user profile document
     const userRef = doc(db, 'users', uid);
-    await setDoc(userRef, profile);
+    await setDoc(userRef, {
+      ...profile,
+      updatedAt: Date.now(),
+      lastLoginAt: Date.now(),
+    }, { merge: true });
+
+    // 3. If password was provided (or setting up email credentials), store securely in auth_accounts
+    if (data.email && data.password) {
+      const cleanEmail = data.email.trim().toLowerCase();
+      const salt = Math.random().toString(36).substring(2, 8);
+      const passwordHash = await hashPassword(data.password, salt);
+      const accountRef = doc(db, 'auth_accounts', cleanEmail);
+      await setDoc(
+        accountRef,
+        {
+          uid,
+          email: cleanEmail,
+          passwordHash,
+          salt,
+          createdAt: Date.now(),
+          lastLoginAt: Date.now(),
+        },
+        { merge: true }
+      );
+    }
   } catch (err) {
     console.warn('Notice saving user profile to Firestore (local session active):', err);
   }

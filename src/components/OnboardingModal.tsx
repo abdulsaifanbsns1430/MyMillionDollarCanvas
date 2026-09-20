@@ -1,5 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { User, ShieldCheck, Sparkles, Check, AlertCircle, Loader2 } from 'lucide-react';
+import {
+  ShieldCheck,
+  Sparkles,
+  Check,
+  AlertCircle,
+  Loader2,
+  Lock,
+  Eye,
+  EyeOff,
+  User,
+  Info,
+} from 'lucide-react';
 import { checkUsernameAvailable, createUserProfile } from '../lib/firebase';
 import { UserProfile } from '../types';
 
@@ -17,7 +28,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   const [username, setUsername] = useState('');
   const [profileId, setProfileId] = useState('');
   const [displayName, setDisplayName] = useState(rawUser?.displayName || '');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [bio, setBio] = useState('');
+
   const [isCheckingUsername, setIsCheckingUsername] = useState(false);
   const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -48,17 +63,17 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
     const timer = setTimeout(async () => {
       setIsCheckingUsername(true);
       try {
-        const available = await checkUsernameAvailable(clean);
+        const available = await checkUsernameAvailable(clean, rawUser?.uid);
         setIsAvailable(available);
       } catch {
-        setIsAvailable(true);
+        setIsAvailable(null);
       } finally {
         setIsCheckingUsername(false);
       }
-    }, 400);
+    }, 350);
 
     return () => clearTimeout(timer);
-  }, [username]);
+  }, [username, rawUser?.uid]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,14 +95,24 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       return;
     }
 
+    if (!password || password.length < 6) {
+      setErrorMsg('Please set an account password of at least 6 characters.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setErrorMsg('Passwords do not match. Please re-type your confirm password.');
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMsg('');
 
     try {
       // Re-verify availability
-      const available = await checkUsernameAvailable(cleanUsername);
+      const available = await checkUsernameAvailable(cleanUsername, rawUser?.uid);
       if (!available) {
-        setErrorMsg(`Username @${cleanUsername} is already taken. Please choose another.`);
+        setErrorMsg(`Username @${cleanUsername} is already registered. Please choose another username.`);
         setIsSubmitting(false);
         return;
       }
@@ -95,16 +120,17 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       const newProfile = await createUserProfile(rawUser.uid, {
         username: cleanUsername,
         profileId: cleanProfileId,
-        displayName: displayName || cleanUsername,
+        displayName: displayName.trim() || cleanUsername,
         email: rawUser.email || '',
         photoURL: rawUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanUsername}`,
-        bio,
+        bio: bio.trim(),
+        password,
       });
 
       onComplete(newProfile);
     } catch (err: any) {
       console.error('Failed to create profile:', err);
-      setErrorMsg('Failed to save profile. Please try again.');
+      setErrorMsg(err.message || 'Failed to save profile. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -113,26 +139,26 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   return (
     <div
       id="onboarding-modal-overlay"
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
     >
-      <div className="bg-[#FAF8F5] border-[3px] border-black shadow-[6px_6px_0px_#000] rounded-2xl max-w-md w-full p-6 animate-in zoom-in-95 duration-200">
+      <div className="bg-[#FAF8F5] border-[3px] border-black shadow-[6px_6px_0px_#000] rounded-2xl max-w-lg w-full p-5 sm:p-6 animate-in zoom-in-95 duration-200 max-h-[92vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center gap-3 mb-5 border-b-[2px] border-black pb-4">
+        <div className="flex items-center gap-3 mb-4 border-b-[2px] border-black pb-3">
           <div className="bg-[#FFE169] border-[2px] border-black shadow-[2px_2px_0px_#000] p-2 rounded-xl">
             <Sparkles className="w-6 h-6 text-black" />
           </div>
           <div>
-            <h2 className="font-extrabold text-xl font-mono text-black">
+            <h2 className="font-extrabold text-lg sm:text-xl font-mono text-black uppercase">
               CLAIM YOUR PIXEL IDENTITY
             </h2>
-            <p className="text-xs text-gray-600">
-              Create your permanent profile before claiming canvas territory.
+            <p className="text-xs text-gray-600 font-mono">
+              Set up your unique username, profile, and account password.
             </p>
           </div>
         </div>
 
         {errorMsg && (
-          <div className="mb-4 bg-red-100 border-[2px] border-black text-red-800 text-xs font-bold p-2.5 rounded-xl flex items-center gap-2">
+          <div className="mb-4 bg-red-100 border-[2px] border-black text-red-800 text-xs font-bold p-3 rounded-xl flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
             <span>{errorMsg}</span>
           </div>
@@ -142,8 +168,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           {/* Unique Username */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-black font-mono uppercase text-black">
-                Unique Username *
+              <label className="text-xs font-black font-mono uppercase text-black flex items-center gap-1.5">
+                <span>Unique Username *</span>
+                <span className="text-[10px] text-gray-500 font-normal lowercase">(cannot be duplicate)</span>
               </label>
               {isCheckingUsername ? (
                 <span className="text-[10px] text-gray-500 flex items-center gap-1 font-mono">
@@ -155,7 +182,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 </span>
               ) : isAvailable === false ? (
                 <span className="text-[10px] text-red-600 font-bold font-mono">
-                  Already Taken
+                  Already Registered
                 </span>
               ) : null}
             </div>
@@ -169,19 +196,109 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                placeholder="cyberartist"
+                placeholder="pixel_artist"
                 className="w-full pl-8 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-sm font-mono font-bold focus:bg-yellow-50 focus:outline-hidden"
               />
             </div>
             <p className="text-[10px] text-gray-500 mt-1 font-mono">
-              Letters, numbers, underscores (3–20 chars). Stored as your unique identity.
+              Only letters, numbers, and underscores (3–20 chars). Strictly unique per artist.
+            </p>
+          </div>
+
+          {/* Display Name (Multiple names allowed) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-black font-mono uppercase text-black">
+                Display Name / Full Name *
+              </label>
+              <span className="text-[10px] text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded border border-purple-300 font-mono font-bold">
+                Multiple users can share names
+              </span>
+            </div>
+            <div className="relative">
+              <span className="absolute left-3 top-2.5 text-gray-400">
+                <User className="w-4 h-4" />
+              </span>
+              <input
+                id="input-display-name"
+                type="text"
+                required
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="e.g. Satoshi Nakamoto or Alex"
+                className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-sm font-bold focus:bg-yellow-50 focus:outline-hidden"
+              />
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1 font-mono">
+              Your public name shown on purchased canvas plots and leaderboard.
+            </p>
+          </div>
+
+          {/* Account Password (Required for all types of signing up/in) */}
+          <div className="bg-[#FFF9E6] border-[2px] border-black p-3 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-black font-mono uppercase text-black flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5" />
+                <span>Account Password *</span>
+              </label>
+              <span className="text-[10px] font-mono text-gray-600 font-bold">
+                Min 6 characters
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <span className="text-[10px] font-mono font-bold text-gray-700 block mb-1">
+                  Create Password
+                </span>
+                <div className="relative">
+                  <input
+                    id="input-onboarding-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full pl-3 pr-8 py-1.5 bg-white border-[2px] border-black rounded-lg text-xs font-mono font-bold focus:bg-white focus:outline-hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2 top-2 text-gray-500 hover:text-black cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[10px] font-mono font-bold text-gray-700 block mb-1">
+                  Confirm Password
+                </span>
+                <div className="relative">
+                  <input
+                    id="input-onboarding-confirm-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full pl-3 pr-3 py-1.5 bg-white border-[2px] border-black rounded-lg text-xs font-mono font-bold focus:bg-white focus:outline-hidden"
+                  />
+                </div>
+              </div>
+            </div>
+            <p className="text-[10px] text-gray-600 font-mono">
+              Secures your account so you can log in on any computer, mobile device, or browser.
             </p>
           </div>
 
           {/* Unique Profile ID */}
           <div>
             <label className="block text-xs font-black font-mono uppercase text-black mb-1">
-              Unique Profile ID *
+              Canvas Profile ID *
             </label>
             <div className="flex items-center gap-2">
               <input
@@ -196,32 +313,17 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setProfileId(`#PX-${Math.floor(1000 + Math.random() * 9000)}`)}
-                className="shrink-0 bg-[#A388EE] hover:bg-purple-300 border-[2px] border-black shadow-[2px_2px_0px_#000] px-2.5 py-2 rounded-xl text-xs font-bold font-mono"
+                className="shrink-0 bg-[#A388EE] hover:bg-purple-300 border-[2px] border-black shadow-[2px_2px_0px_#000] px-3 py-2 rounded-xl text-xs font-bold font-mono cursor-pointer"
               >
                 Randomize
               </button>
             </div>
           </div>
 
-          {/* Display Name */}
-          <div>
-            <label className="block text-xs font-black font-mono uppercase text-black mb-1">
-              Display Name (Optional)
-            </label>
-            <input
-              id="input-display-name"
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Satoshi Nakamoto"
-              className="w-full px-3 py-2 bg-white border-[2px] border-black rounded-xl text-sm font-bold focus:bg-yellow-50 focus:outline-hidden"
-            />
-          </div>
-
           {/* Bio / Motto */}
           <div>
             <label className="block text-xs font-black font-mono uppercase text-black mb-1">
-              Artist Bio / Canvas Motto
+              Artist Bio / Canvas Motto (Optional)
             </label>
             <input
               id="input-bio"
@@ -235,11 +337,11 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="pt-2 flex items-center justify-end gap-2.5">
+          <div className="pt-3 border-t-[2px] border-black flex items-center justify-end gap-2.5">
             <button
               type="button"
               onClick={onCancel}
-              className="bg-white hover:bg-gray-100 border-[2px] border-black shadow-[2px_2px_0px_#000] px-4 py-2 rounded-xl text-xs font-extrabold text-black"
+              className="bg-white hover:bg-gray-100 border-[2px] border-black shadow-[2px_2px_0px_#000] px-4 py-2 rounded-xl text-xs font-extrabold text-black cursor-pointer"
             >
               Cancel
             </button>
@@ -247,12 +349,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               id="btn-submit-onboarding"
               type="submit"
               disabled={isSubmitting || isAvailable === false}
-              className="bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[3px_3px_0px_#000] px-5 py-2 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform"
+              className="bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[3px_3px_0px_#000] px-5 py-2 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform cursor-pointer"
             >
               {isSubmitting ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Registering Profile...</span>
+                  <span>Activating Account...</span>
                 </>
               ) : (
                 <>
