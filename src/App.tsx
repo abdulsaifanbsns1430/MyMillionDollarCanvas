@@ -109,16 +109,18 @@ export default function App() {
     });
   }, []);
 
-  // Listen to Auth state (Firebase Auth & Email OTP sessions)
+  // Listen to Auth state (Firebase Auth & Saved sessions)
   useEffect(() => {
-    // Initial check for active Email OTP session
+    // Initial check for active session in localStorage
     try {
       const storedUser = localStorage.getItem('million_canvas_active_user');
       if (storedUser) {
         const parsed = JSON.parse(storedUser);
         setRawUser(parsed);
-        getUserProfile(parsed.uid).then((p) => {
-          if (p) setUserProfile(p);
+        getUserProfile(parsed.uid, parsed.email || undefined).then((p) => {
+          if (p && p.username) {
+            setUserProfile(p);
+          }
         });
       }
     } catch {}
@@ -131,7 +133,7 @@ export default function App() {
             if (status.hasPassword) {
               const sessionVerified = sessionStorage.getItem('google_pass_verified_' + fbUser.uid);
               if (!sessionVerified) {
-                // User has not unlocked with password yet
+                // User has an existing account and needs to enter password for this session
                 setRawUser(null);
                 setUserProfile(null);
                 setIsAuthModalOpen(true);
@@ -145,33 +147,38 @@ export default function App() {
 
         setRawUser(fbUser);
         try {
-          const profile = await getUserProfile(fbUser.uid);
+          const profile = await getUserProfile(fbUser.uid, fbUser.email || undefined);
           if (profile && profile.username) {
             setUserProfile(profile);
             setShowOnboarding(false);
           } else {
-            // User authenticated for the first time -> prompt onboarding profile & password modal
-            setShowOnboarding(true);
+            // Check if account status has password before deciding to prompt onboarding
+            const status = fbUser.email ? await getGoogleAccountStatus(fbUser.email) : { hasPassword: false };
+            if (!status.hasPassword) {
+              setShowOnboarding(true);
+            } else {
+              setShowOnboarding(false);
+            }
           }
         } catch (err) {
-          console.warn('Profile fetch error, prompting onboarding:', err);
-          setShowOnboarding(true);
+          console.warn('Profile fetch error:', err);
         }
       } else {
-        // Check for Email OTP session
+        // Check for active localStorage session (email/username login)
         try {
           const storedUser = localStorage.getItem('million_canvas_active_user');
           if (storedUser) {
             const parsed = JSON.parse(storedUser);
             setRawUser(parsed);
-            const profile = await getUserProfile(parsed.uid);
+            const profile = await getUserProfile(parsed.uid, parsed.email || undefined);
             if (profile && profile.username) {
               setUserProfile(profile);
               setShowOnboarding(false);
               return;
             } else {
-              setShowOnboarding(true);
-              return;
+              // Clear stale session
+              localStorage.removeItem('million_canvas_active_user');
+              localStorage.removeItem('million_canvas_active_profile');
             }
           }
         } catch {}

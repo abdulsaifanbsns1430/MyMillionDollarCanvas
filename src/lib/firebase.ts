@@ -30,11 +30,6 @@ import {
 } from 'firebase/firestore';
 import { UserProfile, Plot, PixelOrder, LeaderboardEntry } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
-import {
-  validateEmailAddress,
-  triggerEmailOtpSend,
-  verifyEmailOtpCode,
-} from './emailOtpService';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
@@ -75,14 +70,6 @@ export async function hashPassword(password: string, salt: string): Promise<stri
     hash = Math.imul(hash, 0x01000193);
   }
   return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
-}
-
-export interface SendOTPResult {
-  success: boolean;
-  otp: string;
-  isNewAccount: boolean;
-  message: string;
-  cooldownSeconds?: number;
 }
 
 // Check whether an account exists for this email or username
@@ -144,7 +131,7 @@ export async function loginWithIdentifierAndPassword(
     const usernameRef = doc(db, 'usernames', clean);
     const snap = await getDoc(usernameRef);
     if (!snap.exists()) {
-      throw new Error(`No account registered with username "@${clean}". Please check spelling or create an account.`);
+      throw new Error(`No account registered with username "@${clean}". Please check spelling or create an account with Google.`);
     }
     targetUid = snap.data()?.uid;
     const userSnap = await getDoc(doc(db, 'users', targetUid));
@@ -158,7 +145,7 @@ export async function loginWithIdentifierAndPassword(
   const accountRef = doc(db, 'auth_accounts', targetEmail);
   const accSnap = await getDoc(accountRef);
   if (!accSnap.exists()) {
-    throw new Error(`No registered account found for "${identifier}". Please create an account.`);
+    throw new Error(`No registered account found for "${identifier}". Please create an account with Google.`);
   }
 
   const accData = accSnap.data();
@@ -185,6 +172,8 @@ export async function loginWithIdentifierAndPassword(
     if (profile) {
       localStorage.setItem('million_canvas_active_profile', JSON.stringify(profile));
     }
+    // Also mark session as verified
+    sessionStorage.setItem('google_pass_verified_' + targetUid, 'true');
   } catch {}
 
   return appUser;
@@ -199,7 +188,7 @@ export async function verifyAccountPassword(
   const accountRef = doc(db, 'auth_accounts', cleanEmail);
   const snap = await getDoc(accountRef);
   if (!snap.exists()) {
-    throw new Error('No account found with this email address. Please create an account.');
+    throw new Error('No account found with this email address. Please sign up with Google.');
   }
   const data = snap.data();
   const computedHash = await hashPassword(password, data.salt || 'salt');
@@ -207,99 +196,6 @@ export async function verifyAccountPassword(
     throw new Error('Incorrect password. Please verify your password and try again.');
   }
   return { uid: data.uid, email: cleanEmail };
-}
-
-// Dispatches 6-digit OTP for Email ID login using emailOtpService
-export async function sendEmailOTP(
-  email: string,
-  mode: 'signin' | 'signup',
-  password?: string
-): Promise<SendOTPResult> {
-  const cleanEmail = email.trim().toLowerCase();
-  const validation = validateEmailAddress(cleanEmail);
-  if (!validation.isValid) {
-    throw new Error(validation.error || 'Please enter a valid email address.');
-  }
-
-  // If signing in, verify password first
-  if (mode === 'signin') {
-    if (!password) {
-      throw new Error('Please enter your account password.');
-    }
-    await verifyAccountPassword(cleanEmail, password);
-  } else if (mode === 'signup') {
-    // Ensure email is not already registered
-    const exists = await checkAccountExists(cleanEmail);
-    if (exists) {
-      throw new Error(
-        'This email address is already registered. You cannot sign up again with this email. Please switch to Sign In.'
-      );
-    }
-  }
-
-  // Trigger authoritative OTP email send event
-  const dispatch = await triggerEmailOtpSend(cleanEmail, mode);
-
-  return {
-    success: true,
-    otp: dispatch.otp || '',
-    isNewAccount: mode === 'signup',
-    message: dispatch.message,
-    cooldownSeconds: dispatch.cooldownSeconds,
-  };
-}
-
-// Verifies 6-digit OTP and authenticates user
-export async function verifyEmailOTP(
-  email: string,
-  enteredOtp: string,
-  mode: 'signin' | 'signup',
-  password?: string
-): Promise<AppUser> {
-  const cleanEmail = email.trim().toLowerCase();
-  
-  // Verify code with authoritative service
-  await verifyEmailOtpCode(cleanEmail, enteredOtp);
-
-  let uid = '';
-  let profile: UserProfile | null = null;
-  const accountRef = doc(db, 'auth_accounts', cleanEmail);
-
-  if (mode === 'signin') {
-    // Existing account
-    const accSnap = await getDoc(accountRef);
-    if (accSnap.exists()) {
-      const acc = accSnap.data();
-      uid = acc.uid;
-      await updateDoc(accountRef, { lastLoginAt: Date.now() }).catch(() => {});
-      profile = await getUserProfile(uid);
-    } else {
-      throw new Error('Account record not found. Please create an account.');
-    }
-  } else {
-    // New account signup - generate unique UID and prepare for onboarding
-    uid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-  }
-
-  const appUser: AppUser = {
-    uid,
-    displayName: profile?.displayName || null,
-    email: cleanEmail,
-    photoURL: profile?.photoURL || null,
-    isAnonymous: false,
-  };
-
-  // Persist session locally
-  try {
-    localStorage.setItem('million_canvas_active_user', JSON.stringify(appUser));
-    if (profile) {
-      localStorage.setItem('million_canvas_active_profile', JSON.stringify(profile));
-    } else {
-      localStorage.removeItem('million_canvas_active_profile');
-    }
-  } catch {}
-
-  return appUser;
 }
 
 // Authentication helpers
@@ -371,19 +267,47 @@ export async function checkUsernameAvailable(username: string, currentUid?: stri
   }
 }
 
-export async function getUserProfile(uid: string): Promise<UserProfile | null> {
-  try {
-    const userRef = doc(db, 'users', uid);
-    const snap = await getDoc(userRef);
-    if (snap.exists()) {
-      const p = snap.data() as UserProfile;
-      try {
-        localStorage.setItem('million_canvas_active_profile', JSON.stringify(p));
-      } catch {}
-      return p;
+export async function getUserProfile(uid: string, fallbackEmail?: string): Promise<UserProfile | null> {
+  if (!uid && !fallbackEmail) return null;
+
+  if (uid) {
+    try {
+      const userRef = doc(db, 'users', uid);
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        const p = snap.data() as UserProfile;
+        try {
+          localStorage.setItem('million_canvas_active_profile', JSON.stringify(p));
+        } catch {}
+        return p;
+      }
+    } catch (err) {
+      console.warn('Notice reading user profile from Firestore:', err);
     }
-  } catch (err) {
-    console.warn('Notice reading user profile from Firestore:', err);
+  }
+
+  // Fallback check by email in auth_accounts in case UID mapping differs across auth methods
+  if (fallbackEmail) {
+    try {
+      const cleanEmail = fallbackEmail.trim().toLowerCase();
+      const accountRef = doc(db, 'auth_accounts', cleanEmail);
+      const accSnap = await getDoc(accountRef);
+      if (accSnap.exists()) {
+        const targetUid = accSnap.data()?.uid;
+        if (targetUid) {
+          const userSnap = await getDoc(doc(db, 'users', targetUid));
+          if (userSnap.exists()) {
+            const p = userSnap.data() as UserProfile;
+            try {
+              localStorage.setItem('million_canvas_active_profile', JSON.stringify(p));
+            } catch {}
+            return p;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Notice reading fallback profile by email:', err);
+    }
   }
 
   // Fallback to local active profile if present
@@ -391,7 +315,9 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     const stored = localStorage.getItem('million_canvas_active_profile');
     if (stored) {
       const parsed = JSON.parse(stored) as UserProfile;
-      if (parsed.uid === uid) return parsed;
+      if (parsed.uid === uid || (fallbackEmail && parsed.email?.toLowerCase() === fallbackEmail.toLowerCase())) {
+        return parsed;
+      }
     }
   } catch {}
 

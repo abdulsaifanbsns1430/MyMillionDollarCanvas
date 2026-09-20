@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   X,
   LogIn,
-  Mail,
   Lock,
   Eye,
   EyeOff,
@@ -14,13 +13,13 @@ import {
   ShieldAlert,
   UserPlus,
   User,
+  Sparkles,
 } from 'lucide-react';
 import {
   signInWithGoogle,
   loginWithIdentifierAndPassword,
   getGoogleAccountStatus,
   verifyAccountPassword,
-  checkAccountExists,
   fbSignOut,
   auth,
   AppUser,
@@ -34,14 +33,11 @@ interface AuthModalProps {
 
 export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
   const [tab, setTab] = useState<'signin' | 'signup'>('signin');
-  
+
   // Sign In inputs (Identifier: email or registered username)
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-
-  // Sign Up inputs
-  const [signupEmail, setSignupEmail] = useState('');
 
   // Google pending password verification state
   const [googlePendingUser, setGooglePendingUser] = useState<FirebaseUser | null>(null);
@@ -53,13 +49,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showDomainHelp, setShowDomainHelp] = useState(false);
 
-  // Handle direct Sign In with email or registered username + password (No OTP required)
+  // Handle direct Sign In with email or registered username + password
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanId = identifier.trim();
 
     if (!cleanId) {
-      setErrorMsg('Please enter your registered email address or username.');
+      setErrorMsg('Please enter your registered email address or @username.');
       return;
     }
     if (!password) {
@@ -85,55 +81,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     }
   };
 
-  // Handle Sign Up initiation (Check for duplicate email first)
-  const handleSignUpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanEmail = signupEmail.trim().toLowerCase();
-
-    if (!cleanEmail || !cleanEmail.includes('@')) {
-      setErrorMsg('Please enter a valid email address.');
-      return;
-    }
-
-    setIsLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    try {
-      const alreadyRegistered = await checkAccountExists(cleanEmail);
-      if (alreadyRegistered) {
-        setErrorMsg(
-          'This email address is already registered. You cannot create a duplicate account with this email. Please switch to Sign In.'
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      // Proceed directly to identity & password setup
-      const newUid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-      const appUser: AppUser = {
-        uid: newUid,
-        displayName: null,
-        email: cleanEmail,
-        photoURL: null,
-        isAnonymous: false,
-      };
-
-      try {
-        localStorage.setItem('million_canvas_active_user', JSON.stringify(appUser));
-      } catch {}
-
-      onSuccess(appUser);
-      onClose();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to process account creation.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Google Sign-In with mandatory password check for existing accounts
-  const handleGoogleSignIn = async () => {
+  // Google Sign-In / Sign-Up handler
+  const handleGoogleAuth = async (isSignUpFlow: boolean = false) => {
     setIsLoading(true);
     setErrorMsg(null);
     setShowDomainHelp(false);
@@ -149,27 +98,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         return;
       }
 
-      // Check if this account already has an established password in Firebase
+      // Check if this account already has an established profile and password in Firebase
       const status = await getGoogleAccountStatus(userEmail);
 
       if (status.hasPassword) {
-        // User already has a registered password -> require password verification before granting access
+        // User already has an existing password -> prompt for password to verify
         setGooglePendingUser(user);
         setIsLoading(false);
       } else {
-        // First-time Google user -> proceed to onboarding to choose unique username and create password
+        // New user or incomplete profile -> prompt onboarding to set unique username and password
         onSuccess(user);
         onClose();
       }
     } catch (err: any) {
-      console.warn('Google sign-in error:', err);
+      console.warn('Google auth notice:', err);
       if (err.code === 'auth/unauthorized-domain') {
         setShowDomainHelp(true);
         setErrorMsg(
-          `Firebase Google Sign-In requires "${window.location.hostname}" to be whitelisted under Authorized Domains in Firebase Console. You can also sign in or register with Email/Username below immediately!`
+          `Firebase Google Sign-In requires "${window.location.hostname}" to be whitelisted under Authorized Domains in Firebase Console. You can also sign in with Email/Username below.`
         );
       } else if (err.code === 'auth/popup-blocked') {
-        setErrorMsg('Sign-in popup was blocked by your browser. Please allow popups or use Email/Username.');
+        setErrorMsg('Sign-in popup was blocked by your browser. Please allow popups.');
       } else if (err.code === 'auth/popup-closed-by-user') {
         setErrorMsg('Google sign-in was cancelled.');
       } else {
@@ -263,8 +212,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 {googlePendingUser
                   ? 'Enter password to unlock your Google session'
                   : tab === 'signup'
-                  ? 'Register with email to claim canvas territory'
-                  : 'Log in with your username or email & password'}
+                  ? 'Sign up with Google to claim canvas territory'
+                  : 'Log in with Email / Username & Password or Google'}
               </p>
             </div>
           </div>
@@ -282,35 +231,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
             <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
             <div className="flex-1 space-y-1">
               <span>{errorMsg}</span>
-              {errorMsg.includes('already registered') && tab === 'signup' && (
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIdentifier(signupEmail);
-                      setTab('signin');
-                      setErrorMsg(null);
-                    }}
-                    className="underline text-black font-extrabold hover:text-red-950 cursor-pointer"
-                  >
-                    → Click here to Switch to Sign In
-                  </button>
-                </div>
-              )}
               {errorMsg.includes('create an account') && tab === 'signin' && (
                 <div className="pt-1">
                   <button
                     type="button"
                     onClick={() => {
-                      if (identifier.includes('@')) {
-                        setSignupEmail(identifier);
-                      }
                       setTab('signup');
                       setErrorMsg(null);
                     }}
                     className="underline text-black font-extrabold hover:text-red-950 cursor-pointer"
                   >
-                    → Click here to Create New Account
+                    → Click here to Sign Up with Google
                   </button>
                 </div>
               )}
@@ -360,7 +291,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                 {googlePendingUser.email}
               </div>
               <p className="text-[10px] text-gray-600 font-mono mt-1.5">
-                For heightened security, enter your account password to unlock your canvas session.
+                For account security, enter your password to unlock your session.
               </p>
             </div>
 
@@ -419,7 +350,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
           </form>
         ) : (
           /* ========================================================= */
-          /* CASE B: STANDARD SIGN IN OR CREATE ACCOUNT */
+          /* CASE B: STANDARD SIGN IN OR SIGN UP */
           /* ========================================================= */
           <div>
             {/* Tab Switcher */}
@@ -452,163 +383,186 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                     : 'text-gray-600 hover:text-black'
                 }`}
               >
-                Create Account
+                Sign Up (Google)
               </button>
             </div>
 
-            {/* TAB 1: SIGN IN (EMAIL OR USERNAME + PASSWORD, NO OTP) */}
+            {/* TAB 1: SIGN IN (EMAIL OR USERNAME + PASSWORD, OR GOOGLE) */}
             {tab === 'signin' ? (
-              <form onSubmit={handleSignInSubmit} className="space-y-3.5 mb-4">
-                <div>
-                  <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
-                    Email Address or Username *
-                  </label>
-                  <div className="relative">
-                    <User className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
-                    <input
-                      id="input-login-identifier"
-                      type="text"
-                      required
-                      value={identifier}
-                      onChange={(e) => setIdentifier(e.target.value)}
-                      placeholder="artist@canvas.io or @username"
-                      className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
-                    />
-                  </div>
-                  <p className="text-[10px] text-gray-500 font-mono mt-1">
-                    Enter either your registered email or @username.
-                  </p>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-extrabold font-mono uppercase text-black">
-                      Account Password *
+              <div>
+                <form onSubmit={handleSignInSubmit} className="space-y-3.5 mb-4">
+                  <div>
+                    <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
+                      Email Address or @Username *
                     </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
+                      <input
+                        id="input-login-identifier"
+                        type="text"
+                        required
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        placeholder="your-google-email@gmail.com or @username"
+                        className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500 font-mono mt-1">
+                      Use the Google email you signed up with or your unique @username.
+                    </p>
                   </div>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
-                    <input
-                      id="input-login-password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter your account password"
-                      className="w-full pl-9 pr-9 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-2.5 text-gray-500 hover:text-black cursor-pointer"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-extrabold font-mono uppercase text-black">
+                        Account Password *
+                      </label>
+                    </div>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
+                      <input
+                        id="input-login-password"
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Enter your account password"
+                        className="w-full pl-9 pr-9 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-2.5 text-gray-500 hover:text-black cursor-pointer"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    id="btn-submit-signin"
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 transition-transform cursor-pointer"
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Signing In...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Sign In with Password</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+
+                {/* Divider */}
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-black/20" />
+                  </div>
+                  <div className="relative flex justify-center text-[10px] uppercase font-mono font-bold">
+                    <span className="bg-[#FAF8F5] px-2 text-gray-500">Or continue with Google</span>
                   </div>
                 </div>
 
+                {/* Google Sign-In */}
                 <button
-                  id="btn-submit-signin"
-                  type="submit"
+                  id="btn-auth-google"
+                  type="button"
                   disabled={isLoading}
-                  className="w-full bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 transition-transform cursor-pointer"
+                  onClick={() => handleGoogleAuth(false)}
+                  className="w-full bg-white hover:bg-yellow-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] py-2.5 px-4 rounded-xl font-black text-xs text-black flex items-center justify-center gap-2.5 transition-all cursor-pointer"
                 >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Signing In...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Sign In to Canvas</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </form>
-            ) : (
-              /* TAB 2: CREATE ACCOUNT (EMAIL -> ONBOARDING) */
-              <form onSubmit={handleSignUpSubmit} className="space-y-3.5 mb-4">
-                <div>
-                  <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
-                    Your Email Address *
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
-                    <input
-                      id="input-signup-email"
-                      type="email"
-                      required
-                      value={signupEmail}
-                      onChange={(e) => setSignupEmail(e.target.value)}
-                      placeholder="artist@canvas.io"
-                      className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
                     />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>Continue with Google</span>
+                </button>
+              </div>
+            ) : (
+              /* TAB 2: SIGN UP EXCLUSIVELY VIA GOOGLE */
+              <div className="space-y-4 my-2">
+                <div className="bg-[#FFE169]/30 border-[2px] border-black p-3.5 rounded-xl space-y-2 font-mono">
+                  <div className="flex items-center gap-2 font-bold text-xs text-black">
+                    <Sparkles className="w-4 h-4 text-amber-600" />
+                    <span>Verified Artist Registration</span>
                   </div>
-                  <p className="text-[10px] text-gray-500 font-mono mt-1">
-                    On the next screen, you'll choose your unique username, display name, and account password.
+                  <p className="text-[11px] text-gray-700 leading-relaxed">
+                    To keep the Million Dollar Canvas authentic and secure, all new accounts are registered using <strong>Google Sign-Up</strong>.
+                  </p>
+                  <p className="text-[11px] text-gray-700 leading-relaxed">
+                    Once verified, you will immediately choose your unique <strong>@username</strong>, artist profile, and set an account password for cross-device sign in.
                   </p>
                 </div>
 
                 <button
-                  id="btn-submit-signup"
-                  type="submit"
+                  id="btn-signup-google"
+                  type="button"
                   disabled={isLoading}
-                  className="w-full bg-[#FFE169] hover:bg-yellow-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 transition-transform cursor-pointer"
+                  onClick={() => handleGoogleAuth(true)}
+                  className="w-full bg-[#FFE169] hover:bg-yellow-300 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-3 px-4 rounded-xl font-black text-xs text-black flex items-center justify-center gap-2.5 transition-all cursor-pointer"
                 >
                   {isLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Checking Account...</span>
+                      <span>Connecting to Google...</span>
                     </>
                   ) : (
                     <>
-                      <span>Continue to Profile & Password Setup</span>
-                      <ArrowRight className="w-4 h-4" />
+                      <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                        <path
+                          fill="#4285F4"
+                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                        />
+                      </svg>
+                      <span>Sign Up with Google</span>
+                      <ArrowRight className="w-4 h-4 ml-1" />
                     </>
                   )}
                 </button>
-              </form>
+
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setTab('signin')}
+                    className="text-xs font-mono text-gray-600 hover:text-black font-bold cursor-pointer underline"
+                  >
+                    Already have an account? Switch to Sign In
+                  </button>
+                </div>
+              </div>
             )}
-
-            {/* Divider */}
-            <div className="relative my-4">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-black/20" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase font-mono font-bold">
-                <span className="bg-[#FAF8F5] px-2 text-gray-500">Or continue with Google</span>
-              </div>
-            </div>
-
-            {/* Google Sign-In */}
-            <button
-              id="btn-auth-google"
-              type="button"
-              disabled={isLoading}
-              onClick={handleGoogleSignIn}
-              className="w-full bg-white hover:bg-yellow-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] py-2.5 px-4 rounded-xl font-black text-xs text-black flex items-center justify-center gap-2.5 transition-all cursor-pointer"
-            >
-              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-              <span>Continue with Google</span>
-            </button>
           </div>
         )}
 
