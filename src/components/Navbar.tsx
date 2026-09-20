@@ -118,20 +118,20 @@ export const Navbar: React.FC<NavbarProps> = ({
               {user.photoURL ? (
                 <img
                   src={user.photoURL}
-                  alt={user.username}
+                  alt={user.username || 'User'}
                   className="w-5 h-5 rounded-full border border-black object-cover"
                 />
               ) : (
                 <div className="w-5 h-5 rounded-full bg-[#FFE169] border border-black flex items-center justify-center text-[10px] font-bold">
-                  {user.username.charAt(0).toUpperCase()}
+                  {(user.username || 'U').charAt(0).toUpperCase()}
                 </div>
               )}
               <div className="flex flex-col text-left">
                 <span className="text-xs font-extrabold font-mono text-black leading-none">
-                  @{user.username}
+                  @{user.username || 'user'}
                 </span>
                 <span className="text-[9px] font-mono text-gray-500 leading-none mt-0.5">
-                  {user.profileId}
+                  {user.profileId || ''}
                 </span>
               </div>
               <button

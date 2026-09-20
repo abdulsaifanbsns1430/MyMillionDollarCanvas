@@ -88,21 +88,21 @@ export const PlotNoteModal: React.FC<PlotNoteModalProps> = ({
             {plot.ownerPhotoURL ? (
               <img
                 src={plot.ownerPhotoURL}
-                alt={plot.ownerUsername}
+                alt={plot.ownerUsername || 'Owner'}
                 className="w-10 h-10 rounded-full border-[2px] border-black object-cover"
               />
             ) : (
               <div className="w-10 h-10 rounded-full bg-[#FFE169] border-[2px] border-black flex items-center justify-center font-bold text-sm">
-                {plot.ownerUsername.charAt(0).toUpperCase()}
+                {(plot.ownerUsername || 'A').charAt(0).toUpperCase()}
               </div>
             )}
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-extrabold text-sm font-mono text-black">
-                  @{plot.ownerUsername}
+                  @{plot.ownerUsername || 'anonymous'}
                 </span>
                 <span className="bg-gray-100 border border-black text-[9px] font-mono px-1 rounded">
-                  {plot.ownerProfileId}
+                  {plot.ownerProfileId || ''}
                 </span>
               </div>
               <div className="text-[10px] text-gray-500 flex items-center gap-1 mt-0.5">

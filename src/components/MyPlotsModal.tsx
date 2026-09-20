@@ -17,7 +17,9 @@ export const MyPlotsModal: React.FC<MyPlotsModalProps> = ({
   onEditPlot,
   onJumpTo,
 }) => {
-  const myPlots = plots.filter((p) => p.ownerId === user.uid || p.ownerUsername === user.username);
+  const myPlots = plots.filter(
+    (p) => (user?.uid && p.ownerId === user.uid) || (user?.username && p.ownerUsername === user.username)
+  );
   const totalPixels = myPlots.reduce((acc, p) => acc + p.pixelCount, 0);
   const totalValue = (totalPixels * 0.25).toLocaleString('en-US', {
     style: 'currency',

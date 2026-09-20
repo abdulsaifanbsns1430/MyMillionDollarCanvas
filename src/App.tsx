@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { CanvasEngine } from './components/CanvasEngine';
-import { Toolbar } from './components/Toolbar';
+import { BottomStudioBar } from './components/BottomStudioBar';
 import { MiniMap } from './components/MiniMap';
 import { AuthModal } from './components/AuthModal';
 import { OnboardingModal } from './components/OnboardingModal';
-import { BuyPixelsModal } from './components/BuyPixelsModal';
+import { PlotCheckoutModal } from './components/PlotCheckoutModal';
 import { PlotNoteModal } from './components/PlotNoteModal';
 import { PaintStudioModal } from './components/PaintStudioModal';
 import { LeaderboardModal } from './components/LeaderboardModal';
@@ -18,6 +18,9 @@ import {
   Plot,
   PixelSelection,
   ViewportState,
+  WorkflowStep,
+  SelectTool,
+  PaintTool,
 } from './types';
 import {
   auth,
@@ -33,6 +36,9 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
+  applyDragSelection,
+  mapImageToDraftPixels,
+  getSelectionPixelSet,
 } from './lib/canvasUtils';
 
 export default function App() {
@@ -42,15 +48,20 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
+  // Workflow State Machine
+  const [step, setStep] = useState<WorkflowStep>('idle');
+  const [inspectCoord, setInspectCoord] = useState<{ x: number; y: number } | null>(null);
+  const [selectTool, setSelectTool] = useState<SelectTool>('add');
+  const [paintTool, setPaintTool] = useState<PaintTool>('brush');
+  const [currentColor, setCurrentColor] = useState<string>('#FF6B6B');
+  const [draftPixels, setDraftPixels] = useState<Map<string, string>>(new Map());
+
   // Canvas & Plot state
-  // Default mode is 'pan' as requested!
-  const [mode, setMode] = useState<'pan' | 'select'>('pan');
-  const [selectionAction, setSelectionAction] = useState<'add' | 'remove'>('add');
   const [plots, setPlots] = useState<Plot[]>([]);
   const [selection, setSelection] = useState<PixelSelection | null>(null);
   const [hoveredPlotId, setHoveredPlotId] = useState<string | null>(null);
 
-  // Viewport tracking (default centered on 500, 500 for 1000x1000)
+  // Viewport tracking (default centered on 500, 500)
   const [viewport, setViewport] = useState<ViewportState>({
     x: 0,
     y: 0,
@@ -66,7 +77,7 @@ export default function App() {
   // Modal dialog states
   const [activePlotForNote, setActivePlotForNote] = useState<Plot | null>(null);
   const [activePlotForPaint, setActivePlotForPaint] = useState<Plot | null>(null);
-  const [isBuyModalOpen, setIsBuyModalOpen] = useState(false);
+  const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
@@ -76,7 +87,7 @@ export default function App() {
   // Calculate total claimed pixels
   const totalClaimedPixels = plots.reduce((acc, p) => acc + p.pixelCount, 0);
 
-  // Track window resizing
+  // Window resize handler
   useEffect(() => {
     const handleResize = () => {
       setContainerDimensions({
@@ -109,9 +120,8 @@ export default function App() {
     });
   }, []);
 
-  // Listen to Auth state (Firebase Auth & Saved sessions)
+  // Auth State Listener
   useEffect(() => {
-    // Initial check for active session in localStorage
     try {
       const storedUser = localStorage.getItem('million_canvas_active_user');
       if (storedUser) {
@@ -133,7 +143,6 @@ export default function App() {
             if (status.hasPassword) {
               const sessionVerified = sessionStorage.getItem('google_pass_verified_' + fbUser.uid);
               if (!sessionVerified) {
-                // User has an existing account and needs to enter password for this session
                 setRawUser(null);
                 setUserProfile(null);
                 setIsAuthModalOpen(true);
@@ -152,7 +161,6 @@ export default function App() {
             setUserProfile(profile);
             setShowOnboarding(false);
           } else {
-            // Check if account status has password before deciding to prompt onboarding
             const status = fbUser.email ? await getGoogleAccountStatus(fbUser.email) : { hasPassword: false };
             if (!status.hasPassword) {
               setShowOnboarding(true);
@@ -164,7 +172,6 @@ export default function App() {
           console.warn('Profile fetch error:', err);
         }
       } else {
-        // Check for active localStorage session (email/username login)
         try {
           const storedUser = localStorage.getItem('million_canvas_active_user');
           if (storedUser) {
@@ -176,7 +183,6 @@ export default function App() {
               setShowOnboarding(false);
               return;
             } else {
-              // Clear stale session
               localStorage.removeItem('million_canvas_active_user');
               localStorage.removeItem('million_canvas_active_profile');
             }
@@ -191,16 +197,14 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Subscribe to real-time plots from Firestore
+  // Real-time Firestore Plots Subscription
   useEffect(() => {
     const unsubscribe = subscribePlots((remotePlots) => {
       setPlots(remotePlots || []);
     });
-
     return () => unsubscribe();
   }, []);
 
-  // Handle Login button clicked
   const handleOpenLogin = () => {
     setIsAuthModalOpen(true);
   };
@@ -230,60 +234,144 @@ export default function App() {
     [containerDimensions]
   );
 
-  // Buy Selected Area Trigger
-  const handleOpenBuyModal = () => {
+  // Workflow Handlers
+  const handleInspectPixel = (x: number, y: number) => {
+    setInspectCoord({ x, y });
+    setStep('inspect');
+  };
+
+  const handleStartSelecting = () => {
+    if (inspectCoord) {
+      // Initialize selection with clicked pixel
+      const initSel = applyDragSelection(
+        inspectCoord.x,
+        inspectCoord.y,
+        inspectCoord.x,
+        inspectCoord.y,
+        plots,
+        [],
+        'add'
+      );
+      setSelection(initSel);
+    }
+    setStep('select');
+    setSelectTool('add');
+  };
+
+  const handleClearSelection = () => {
+    setSelection(null);
+    setDraftPixels(new Map());
+  };
+
+  const handleCancelWorkflow = () => {
+    setStep('idle');
+    setInspectCoord(null);
+    setSelection(null);
+    setDraftPixels(new Map());
+    setIsCheckoutModalOpen(false);
+  };
+
+  const handleProceedToPaint = () => {
+    if (!selection || selection.pixelCount === 0) return;
+
+    // Seed default draft color for selected pixels if draft is empty
+    const pixelSet = getSelectionPixelSet(selection);
+    setDraftPixels((prev) => {
+      const next = new Map(prev);
+      pixelSet.forEach((key) => {
+        if (!next.has(key)) {
+          next.set(key, '#FFE169');
+        }
+      });
+      return next;
+    });
+
+    setStep('paint');
+    setPaintTool('brush');
+  };
+
+  const handleBackToSelect = () => {
+    setStep('select');
+    setSelectTool('add');
+  };
+
+  const handleProceedToCheckout = () => {
     if (!userProfile) {
       setIsAuthModalOpen(true);
       return;
     }
+    if (!selection || selection.pixelCount === 0) return;
+    setIsCheckoutModalOpen(true);
+  };
 
-    if (selection && selection.pixelCount > 0) {
-      setIsBuyModalOpen(true);
+  // Painting handlers
+  const handlePaintPixel = (x: number, y: number, color: string) => {
+    const key = `${x},${y}`;
+    setDraftPixels((prev) => {
+      const next = new Map(prev);
+      next.set(key, color);
+      return next;
+    });
+  };
+
+  const handleFillSelection = (color: string) => {
+    if (!selection) return;
+    const pixelSet = getSelectionPixelSet(selection);
+    setDraftPixels((prev) => {
+      const next = new Map(prev);
+      pixelSet.forEach((key) => {
+        next.set(key, color);
+      });
+      return next;
+    });
+  };
+
+  // Upload image and span across entire selection
+  const handleUploadImage = async (file: File) => {
+    if (!selection || selection.pixelCount === 0) return;
+    try {
+      const mapped = await mapImageToDraftPixels(file, selection);
+      setDraftPixels(mapped);
+    } catch (err) {
+      console.error('Image mapping error:', err);
     }
   };
 
-  // Purchase Complete Callback (supports multiple plots/areas)
-  const handlePurchaseSuccess = async (newPlots: Plot[]) => {
+  // Purchase Complete Callback
+  const handlePurchaseSuccess = async (newPlot: Plot) => {
     try {
-      // 1. Save all plots to Firestore
-      for (const plot of newPlots) {
-        await savePlot(plot);
-      }
+      // 1. Save plot to Firestore
+      await savePlot(newPlot);
 
-      // 2. Update local state
-      setPlots((prev) => [...prev, ...newPlots]);
-      const addedPixels = newPlots.reduce((sum, p) => sum + p.pixelCount, 0);
-      const addedCost = newPlots.reduce((sum, p) => sum + p.pricePaid, 0);
+      // 2. Update local plots
+      setPlots((prev) => [...prev, newPlot]);
 
       if (userProfile) {
         setUserProfile({
           ...userProfile,
-          totalPixelsBought: (userProfile.totalPixelsBought || 0) + addedPixels,
-          totalSpent: (userProfile.totalSpent || 0) + addedCost,
+          totalPixelsBought: (userProfile.totalPixelsBought || 0) + newPlot.pixelCount,
+          totalSpent: (userProfile.totalSpent || 0) + newPlot.pricePaid,
         });
       }
 
-      // 3. Close buy modal & clear selection
-      setIsBuyModalOpen(false);
+      // 3. Reset workflow
+      setIsCheckoutModalOpen(false);
       setSelection(null);
-
-      // 4. Open Paint Studio for the first plot
-      if (newPlots.length > 0) {
-        setActivePlotForPaint(newPlots[0]);
-      }
+      setDraftPixels(new Map());
+      setInspectCoord(null);
+      setStep('idle');
     } catch (err) {
       console.error('Error saving new plot to Firebase:', err);
-      // Ensure local state preserves plot even on network delay
-      setPlots((prev) => [...prev, ...newPlots]);
-      setIsBuyModalOpen(false);
+      setPlots((prev) => [...prev, newPlot]);
+      setIsCheckoutModalOpen(false);
       setSelection(null);
-      if (newPlots.length > 0) {
-        setActivePlotForPaint(newPlots[0]);
-      }
+      setDraftPixels(new Map());
+      setInspectCoord(null);
+      setStep('idle');
     }
   };
 
-  // Plot Save (Artwork & Note) from PaintStudioModal
+  // Plot Save (Artwork & Note) from PaintStudioModal for existing owned plots
   const handleSavePlotArtwork = async (
     plotId: string,
     updatedPixels: string[],
@@ -297,7 +385,6 @@ export default function App() {
       console.warn('Remote plot update error, saving locally:', err);
     }
 
-    // Update in local state
     setPlots((prev) =>
       prev.map((p) =>
         p.id === plotId
@@ -335,32 +422,44 @@ export default function App() {
 
       {/* Main Canvas Viewport Area */}
       <main className="relative flex-1 w-full h-full overflow-hidden bg-[#ECE7DE]">
-        {/* Floating Top Toolbar */}
-        <Toolbar
-          mode={mode}
-          onModeChange={setMode}
-          selectionAction={selectionAction}
-          onSelectionActionChange={setSelectionAction}
-          viewport={viewport}
-          onViewportChange={setViewport}
-          selection={selection}
-          onClearSelection={() => setSelection(null)}
-          onOpenBuyModal={handleOpenBuyModal}
-          containerWidth={containerDimensions.width}
-          containerHeight={containerDimensions.height}
-        />
-
-        {/* Dual-Layer HTML5 Canvas Engine */}
+        {/* Canvas Engine */}
         <CanvasEngine
           plots={plots}
-          mode={mode}
-          selectionAction={selectionAction}
+          step={step}
+          selectTool={selectTool}
+          paintTool={paintTool}
+          currentColor={currentColor}
+          onColorChange={setCurrentColor}
           viewport={viewport}
           onViewportChange={setViewport}
           onSelectPlot={(plot) => setActivePlotForNote(plot)}
+          onInspectPixel={handleInspectPixel}
           onSelectionChange={setSelection}
           selection={selection}
+          draftPixels={draftPixels}
+          onPaintPixel={handlePaintPixel}
+          onFillSelection={handleFillSelection}
           hoveredPlotId={hoveredPlotId}
+        />
+
+        {/* Animated Bottom Studio Bar (Inspect, Selection, and Paint workflows) */}
+        <BottomStudioBar
+          step={step}
+          inspectCoord={inspectCoord}
+          selectTool={selectTool}
+          onSelectToolChange={setSelectTool}
+          paintTool={paintTool}
+          onPaintToolChange={setPaintTool}
+          currentColor={currentColor}
+          onColorChange={setCurrentColor}
+          selection={selection}
+          onStartSelecting={handleStartSelecting}
+          onClearSelection={handleClearSelection}
+          onCancelWorkflow={handleCancelWorkflow}
+          onProceedToPaint={handleProceedToPaint}
+          onBackToSelect={handleBackToSelect}
+          onProceedToCheckout={handleProceedToCheckout}
+          onUploadImage={handleUploadImage}
         />
 
         {/* Mini-Map Radar (Bottom-Right) */}
@@ -397,7 +496,7 @@ export default function App() {
         />
       )}
 
-      {/* 1. Onboarding Profile Gate (Appears ONLY AFTER Successful Firebase Login) */}
+      {/* 1. Onboarding Profile Gate */}
       {showOnboarding && rawUser && (
         <OnboardingModal
           rawUser={rawUser}
@@ -412,7 +511,7 @@ export default function App() {
         />
       )}
 
-      {/* 2. Interactive Note Pop-up (When any visitor clicks a plot) */}
+      {/* 2. Interactive Note Pop-up (When clicking an owned plot) */}
       {activePlotForNote && (
         <PlotNoteModal
           plot={activePlotForNote}
@@ -425,7 +524,7 @@ export default function App() {
         />
       )}
 
-      {/* 3. Pixel Paint Studio (When an owner paints or edits their plot) */}
+      {/* 3. Pixel Paint Studio (When an owner re-edits an existing owned plot) */}
       {activePlotForPaint && (
         <PaintStudioModal
           plot={activePlotForPaint}
@@ -434,12 +533,13 @@ export default function App() {
         />
       )}
 
-      {/* 4. Buy Pixels Checkout Modal */}
-      {isBuyModalOpen && selection && userProfile && (
-        <BuyPixelsModal
+      {/* 4. Brand New Checkout & Claim Modal (Step 3) */}
+      {isCheckoutModalOpen && selection && userProfile && (
+        <PlotCheckoutModal
           selection={selection}
+          draftPixels={draftPixels}
           user={userProfile}
-          onClose={() => setIsBuyModalOpen(false)}
+          onClose={() => setIsCheckoutModalOpen(false)}
           onSuccess={handlePurchaseSuccess}
         />
       )}
@@ -468,7 +568,7 @@ export default function App() {
         <HowItWorksModal onClose={() => setIsHowItWorksOpen(false)} />
       )}
 
-      {/* 8. International Monetization Guide (For Owner / India) */}
+      {/* 8. International Monetization Guide */}
       {isMonetizationOpen && (
         <MonetizationGuideModal onClose={() => setIsMonetizationOpen(false)} />
       )}

@@ -31,9 +31,9 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   const filteredPlots = query.trim()
     ? plots.filter(
         (p) =>
-          p.title.toLowerCase().includes(query.toLowerCase()) ||
-          p.ownerUsername.toLowerCase().includes(query.toLowerCase()) ||
-          p.note.toLowerCase().includes(query.toLowerCase())
+          (p.title || '').toLowerCase().includes(query.toLowerCase()) ||
+          (p.ownerUsername || '').toLowerCase().includes(query.toLowerCase()) ||
+          (p.note || '').toLowerCase().includes(query.toLowerCase())
       )
     : [];
 

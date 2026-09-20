@@ -95,3 +95,7 @@ export interface PixelOrder {
   status: 'completed' | 'pending';
   timestamp: number;
 }
+
+export type WorkflowStep = 'idle' | 'inspect' | 'select' | 'paint';
+export type SelectTool = 'add' | 'erase' | 'pan';
+export type PaintTool = 'brush' | 'eraser' | 'bucket' | 'eyedropper' | 'pan';

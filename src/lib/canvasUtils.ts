@@ -647,6 +647,99 @@ export function processImageToRegions(
   });
 }
 
+// Get a Set of "x,y" keys for all pixels in a selection
+export function getSelectionPixelSet(selection: PixelSelection | null): Set<string> {
+  const set = new Set<string>();
+  if (!selection) return set;
+  const regions = selection.regions && selection.regions.length > 0 ? selection.regions : [
+    { x: selection.x, y: selection.y, width: selection.width, height: selection.height }
+  ];
+  for (const r of regions) {
+    for (let py = r.y; py < r.y + r.height; py++) {
+      for (let px = r.x; px < r.x + r.width; px++) {
+        set.add(`${px},${py}`);
+      }
+    }
+  }
+  return set;
+}
+
+// Map an uploaded image file across the overall bounding box of selected pixels
+export function mapImageToDraftPixels(
+  imageFile: File,
+  selection: PixelSelection
+): Promise<Map<string, string>> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const result = new Map<string, string>();
+        const regions = selection.regions && selection.regions.length > 0 ? selection.regions : [
+          { id: '1', x: selection.x, y: selection.y, width: selection.width, height: selection.height, pixelCount: selection.pixelCount, cost: selection.cost }
+        ];
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        regions.forEach((r) => {
+          minX = Math.min(minX, r.x);
+          minY = Math.min(minY, r.y);
+          maxX = Math.max(maxX, r.x + r.width);
+          maxY = Math.max(maxY, r.y + r.height);
+        });
+
+        const bboxW = Math.max(1, maxX - minX);
+        const bboxH = Math.max(1, maxY - minY);
+
+        const offscreen = document.createElement('canvas');
+        offscreen.width = bboxW;
+        offscreen.height = bboxH;
+        const ctx = offscreen.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas context not available'));
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, bboxW, bboxH);
+
+        const pixelSet = getSelectionPixelSet(selection);
+        const imgData = ctx.getImageData(0, 0, bboxW, bboxH).data;
+
+        pixelSet.forEach((key) => {
+          const [pxStr, pyStr] = key.split(',');
+          const px = parseInt(pxStr, 10);
+          const py = parseInt(pyStr, 10);
+          const rx = px - minX;
+          const ry = py - minY;
+
+          if (rx >= 0 && rx < bboxW && ry >= 0 && ry < bboxH) {
+            const idx = (ry * bboxW + rx) * 4;
+            const r = imgData[idx];
+            const g = imgData[idx + 1];
+            const b = imgData[idx + 2];
+            const a = imgData[idx + 3];
+
+            if (a < 50) {
+              result.set(key, '#FAF8F5');
+            } else {
+              result.set(key, rgbToHex(r, g, b));
+            }
+          }
+        });
+
+        resolve(result);
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(imageFile);
+  });
+}
+
 // Empty initial plots for a clean, fresh, real collaborative canvas
 export function getInitialSeedPlots(): Plot[] {
   return [];

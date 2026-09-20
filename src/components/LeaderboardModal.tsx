@@ -142,15 +142,16 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
               No pixel purchases recorded yet. Be the first to claim a plot!
             </div>
           ) : (
-            entries.map((entry) => {
+            entries.map((entry, index) => {
               const dominance = ((entry.totalPixelsBought / 4000000) * 100).toFixed(3);
               const isTop1 = entry.rank === 1;
               const isTop2 = entry.rank === 2;
               const isTop3 = entry.rank === 3;
+              const itemKey = entry.uid || (entry.username ? `user-${entry.username}` : `entry-${entry.rank || index}`);
 
               return (
                 <div
-                  key={entry.username}
+                  key={itemKey}
                   className={`border-[2px] border-black p-3 rounded-xl flex items-center justify-between gap-2 transition-transform hover:-translate-y-0.5 ${
                     isTop1
                       ? 'bg-[#FFE169] shadow-[3px_3px_0px_#000]'
@@ -180,22 +181,22 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                     {entry.photoURL ? (
                       <img
                         src={entry.photoURL}
-                        alt={entry.username}
+                        alt={entry.username || 'User'}
                         className="w-8 h-8 rounded-full border border-black object-cover shrink-0"
                       />
                     ) : (
                       <div className="w-8 h-8 rounded-full bg-[#4ECDC4] border border-black flex items-center justify-center font-bold text-xs shrink-0">
-                        {entry.username.charAt(0).toUpperCase()}
+                        {(entry.username || 'U').charAt(0).toUpperCase()}
                       </div>
                     )}
 
                     <div className="flex flex-col">
                       <div className="flex items-center gap-1.5">
                         <span className="font-extrabold text-sm font-mono text-black">
-                          @{entry.username}
+                          @{entry.username || 'user'}
                         </span>
                         <span className="text-[10px] font-mono text-gray-600 bg-white/70 px-1 border border-black/30 rounded">
-                          {entry.profileId}
+                          {entry.profileId || ''}
                         </span>
                       </div>
                       <div className="text-[10px] text-gray-600 flex items-center gap-1">
