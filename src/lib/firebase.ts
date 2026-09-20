@@ -10,6 +10,8 @@ import {
   onAuthStateChanged,
   User as FirebaseUser,
 } from 'firebase/auth';
+
+export { fbSignOut };
 import {
   getFirestore,
   doc,
@@ -83,17 +85,109 @@ export interface SendOTPResult {
   cooldownSeconds?: number;
 }
 
-// Check whether an account exists for this email
-export async function checkAccountExists(email: string): Promise<boolean> {
-  const cleanEmail = email.trim().toLowerCase();
+// Check whether an account exists for this email or username
+export async function checkAccountExists(emailOrUsername: string): Promise<boolean> {
+  const clean = emailOrUsername.trim().toLowerCase().replace(/^@/, '');
+  if (!clean) return false;
   try {
-    const accountRef = doc(db, 'auth_accounts', cleanEmail);
-    const snap = await getDoc(accountRef);
-    return snap.exists();
+    if (clean.includes('@')) {
+      const accountRef = doc(db, 'auth_accounts', clean);
+      const snap = await getDoc(accountRef);
+      return snap.exists();
+    } else {
+      const usernameRef = doc(db, 'usernames', clean);
+      const snap = await getDoc(usernameRef);
+      return snap.exists();
+    }
   } catch (err) {
     console.warn('Notice checking account existence:', err);
     return false;
   }
+}
+
+// Check if a Google user has an established password in auth_accounts
+export async function getGoogleAccountStatus(email: string): Promise<{ exists: boolean; uid?: string; hasPassword: boolean }> {
+  const cleanEmail = email.trim().toLowerCase();
+  try {
+    const accountRef = doc(db, 'auth_accounts', cleanEmail);
+    const snap = await getDoc(accountRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      return { exists: true, uid: data.uid, hasPassword: !!data.passwordHash };
+    }
+  } catch (err) {
+    console.warn('Notice checking Google account status:', err);
+  }
+  return { exists: false, hasPassword: false };
+}
+
+// Log in directly with email OR registered username + password (No OTP required)
+export async function loginWithIdentifierAndPassword(
+  identifier: string,
+  password: string
+): Promise<AppUser> {
+  const clean = identifier.trim().toLowerCase().replace(/^@/, '');
+  if (!clean) {
+    throw new Error('Please enter your registered email address or username.');
+  }
+  if (!password) {
+    throw new Error('Please enter your account password.');
+  }
+
+  let targetEmail = '';
+  let targetUid = '';
+
+  if (clean.includes('@')) {
+    targetEmail = clean;
+  } else {
+    // Lookup username in Firestore
+    const usernameRef = doc(db, 'usernames', clean);
+    const snap = await getDoc(usernameRef);
+    if (!snap.exists()) {
+      throw new Error(`No account registered with username "@${clean}". Please check spelling or create an account.`);
+    }
+    targetUid = snap.data()?.uid;
+    const userSnap = await getDoc(doc(db, 'users', targetUid));
+    if (!userSnap.exists() || !userSnap.data()?.email) {
+      throw new Error(`Account associated with "@${clean}" has no registered email. Please sign in with your email.`);
+    }
+    targetEmail = userSnap.data()?.email.toLowerCase();
+  }
+
+  // Verify credentials in auth_accounts
+  const accountRef = doc(db, 'auth_accounts', targetEmail);
+  const accSnap = await getDoc(accountRef);
+  if (!accSnap.exists()) {
+    throw new Error(`No registered account found for "${identifier}". Please create an account.`);
+  }
+
+  const accData = accSnap.data();
+  const computedHash = await hashPassword(password, accData.salt || 'salt');
+  if (computedHash !== accData.passwordHash) {
+    throw new Error('Incorrect password. Please verify your password and try again.');
+  }
+
+  targetUid = accData.uid;
+  await updateDoc(accountRef, { lastLoginAt: Date.now() }).catch(() => {});
+
+  const profile = await getUserProfile(targetUid);
+
+  const appUser: AppUser = {
+    uid: targetUid,
+    displayName: profile?.displayName || null,
+    email: targetEmail,
+    photoURL: profile?.photoURL || null,
+    isAnonymous: false,
+  };
+
+  try {
+    localStorage.setItem('million_canvas_active_user', JSON.stringify(appUser));
+    if (profile) {
+      localStorage.setItem('million_canvas_active_profile', JSON.stringify(profile));
+    }
+  } catch {}
+
+  return appUser;
 }
 
 // Verifies account password against stored salt and hash
@@ -105,7 +199,7 @@ export async function verifyAccountPassword(
   const accountRef = doc(db, 'auth_accounts', cleanEmail);
   const snap = await getDoc(accountRef);
   if (!snap.exists()) {
-    throw new Error('No account found with this email address. Please switch to Create Account.');
+    throw new Error('No account found with this email address. Please create an account.');
   }
   const data = snap.data();
   const computedHash = await hashPassword(password, data.salt || 'salt');

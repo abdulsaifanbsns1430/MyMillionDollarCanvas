@@ -26,6 +26,7 @@ import {
   subscribePlots,
   savePlot,
   updatePlotArtworkAndNote,
+  getGoogleAccountStatus,
   AppUser,
 } from './lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
@@ -124,6 +125,24 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
+        if (fbUser.email) {
+          try {
+            const status = await getGoogleAccountStatus(fbUser.email);
+            if (status.hasPassword) {
+              const sessionVerified = sessionStorage.getItem('google_pass_verified_' + fbUser.uid);
+              if (!sessionVerified) {
+                // User has not unlocked with password yet
+                setRawUser(null);
+                setUserProfile(null);
+                setIsAuthModalOpen(true);
+                return;
+              }
+            }
+          } catch (e) {
+            console.warn('Notice checking google status:', e);
+          }
+        }
+
         setRawUser(fbUser);
         try {
           const profile = await getUserProfile(fbUser.uid);

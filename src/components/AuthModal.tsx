@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   X,
   LogIn,
@@ -9,22 +9,20 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle,
-  Zap,
   ArrowRight,
-  ArrowLeft,
-  KeyRound,
-  Copy,
-  Check,
-  RotateCw,
-  Info,
+  ShieldCheck,
   ShieldAlert,
   UserPlus,
+  User,
 } from 'lucide-react';
 import {
   signInWithGoogle,
-  sendEmailOTP,
-  verifyEmailOTP,
+  loginWithIdentifierAndPassword,
+  getGoogleAccountStatus,
+  verifyAccountPassword,
   checkAccountExists,
+  fbSignOut,
+  auth,
   AppUser,
 } from '../lib/firebase';
 import { User as FirebaseUser } from 'firebase/auth';
@@ -35,48 +33,62 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
-  const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
   const [tab, setTab] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState('');
+  
+  // Sign In inputs (Identifier: email or registered username)
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // 6-digit OTP state
-  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
-  const [generatedOtp, setGeneratedOtp] = useState<string | null>(null);
-  const [hasCopiedOtp, setHasCopiedOtp] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(0);
+  // Sign Up inputs
+  const [signupEmail, setSignupEmail] = useState('');
+
+  // Google pending password verification state
+  const [googlePendingUser, setGooglePendingUser] = useState<FirebaseUser | null>(null);
+  const [googlePassword, setGooglePassword] = useState('');
+  const [showGooglePassword, setShowGooglePassword] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showDomainHelp, setShowDomainHelp] = useState(false);
 
-  // References for OTP inputs to handle auto-focus
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Resend cooldown timer
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [resendCooldown]);
-
-  // Focus first OTP box when entering OTP step
-  useEffect(() => {
-    if (step === 'otp') {
-      setTimeout(() => {
-        inputRefs.current[0]?.focus();
-      }, 150);
-    }
-  }, [step]);
-
-  // Step 1: Submit credentials (Email for Signup, Email + Password for Signin)
-  const handleCredentialsSubmit = async (e: React.FormEvent) => {
+  // Handle direct Sign In with email or registered username + password (No OTP required)
+  const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanId = identifier.trim();
+
+    if (!cleanId) {
+      setErrorMsg('Please enter your registered email address or username.');
+      return;
+    }
+    if (!password) {
+      setErrorMsg('Please enter your account password.');
+      return;
+    }
+
+    setIsLoading(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const user = await loginWithIdentifierAndPassword(cleanId, password);
+      setSuccessMsg('Sign in successful! Entering canvas...');
+      setTimeout(() => {
+        onSuccess(user);
+        onClose();
+      }, 350);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to sign in. Please verify your credentials.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle Sign Up initiation (Check for duplicate email first)
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = signupEmail.trim().toLowerCase();
 
     if (!cleanEmail || !cleanEmail.includes('@')) {
       setErrorMsg('Please enter a valid email address.');
@@ -88,142 +100,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
     setSuccessMsg(null);
 
     try {
-      if (tab === 'signup') {
-        // Sign-up check: Ensure email is not already registered
-        const alreadyRegistered = await checkAccountExists(cleanEmail);
-        if (alreadyRegistered) {
-          setErrorMsg(
-            'This email address is already registered. You cannot create a duplicate account with this email. Please switch to Sign In.'
-          );
-          setIsLoading(false);
-          return;
-        }
-
-        // Trigger real email OTP send (Password will be set during username/profile setup)
-        const result = await sendEmailOTP(cleanEmail, 'signup');
-        setGeneratedOtp(result.otp);
-        setSuccessMsg(`Verification code sent to ${cleanEmail}`);
-        setResendCooldown(result.cooldownSeconds || 60);
-        setStep('otp');
-        setOtpDigits(['', '', '', '', '', '']);
-      } else {
-        // Sign-in check: Password is required for existing accounts
-        if (!password) {
-          setErrorMsg('Please enter your account password.');
-          setIsLoading(false);
-          return;
-        }
-
-        // Verify account exists & password is correct, then trigger OTP
-        const result = await sendEmailOTP(cleanEmail, 'signin', password);
-        setGeneratedOtp(result.otp);
-        setSuccessMsg(`Verification code sent to ${cleanEmail}`);
-        setResendCooldown(result.cooldownSeconds || 60);
-        setStep('otp');
-        setOtpDigits(['', '', '', '', '', '']);
+      const alreadyRegistered = await checkAccountExists(cleanEmail);
+      if (alreadyRegistered) {
+        setErrorMsg(
+          'This email address is already registered. You cannot create a duplicate account with this email. Please switch to Sign In.'
+        );
+        setIsLoading(false);
+        return;
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication error. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  // Step 2: Handle OTP input changes & auto-advance
-  const handleOtpChange = (index: number, val: string) => {
-    const cleanVal = val.replace(/[^0-9]/g, '');
-    if (!cleanVal && val !== '') return;
+      // Proceed directly to identity & password setup
+      const newUid = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      const appUser: AppUser = {
+        uid: newUid,
+        displayName: null,
+        email: cleanEmail,
+        photoURL: null,
+        isAnonymous: false,
+      };
 
-    const newDigits = [...otpDigits];
-    newDigits[index] = cleanVal.slice(-1);
-    setOtpDigits(newDigits);
+      try {
+        localStorage.setItem('million_canvas_active_user', JSON.stringify(appUser));
+      } catch {}
 
-    if (cleanVal && index < 5) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-  };
-
-  // Support pasting full 6-digit OTP
-  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData('text').replace(/[^0-9]/g, '').slice(0, 6);
-    if (!pasted) return;
-
-    const newDigits = [...otpDigits];
-    for (let i = 0; i < 6; i++) {
-      newDigits[i] = pasted[i] || '';
-    }
-    setOtpDigits(newDigits);
-
-    const nextIndex = Math.min(pasted.length, 5);
-    inputRefs.current[nextIndex]?.focus();
-  };
-
-  // Auto-fill OTP button for dev/testing convenience
-  const handleAutoFillOtp = () => {
-    if (!generatedOtp || generatedOtp.length !== 6) return;
-    const split = generatedOtp.split('');
-    setOtpDigits(split);
-    inputRefs.current[5]?.focus();
-  };
-
-  // Copy OTP code to clipboard
-  const handleCopyOtp = () => {
-    if (!generatedOtp) return;
-    navigator.clipboard.writeText(generatedOtp);
-    setHasCopiedOtp(true);
-    setTimeout(() => setHasCopiedOtp(false), 2000);
-  };
-
-  // Resend fresh OTP
-  const handleResendOtp = async () => {
-    if (resendCooldown > 0 || isLoading) return;
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const result = await sendEmailOTP(email.trim().toLowerCase(), tab, password || undefined);
-      setGeneratedOtp(result.otp);
-      setSuccessMsg('A new verification code has been dispatched to your email.');
-      setResendCooldown(result.cooldownSeconds || 60);
-      setOtpDigits(['', '', '', '', '', '']);
-      inputRefs.current[0]?.focus();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to resend verification code.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Step 2: Verify OTP and complete authentication
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const enteredCode = otpDigits.join('');
-    if (enteredCode.length !== 6) {
-      setErrorMsg('Please enter all 6 digits of your verification code.');
-      return;
-    }
-
-    setIsLoading(true);
-    setErrorMsg(null);
-
-    try {
-      const user = await verifyEmailOTP(email.trim().toLowerCase(), enteredCode, tab, password);
-      onSuccess(user);
+      onSuccess(appUser);
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Verification failed. Please check the code and try again.');
+      setErrorMsg(err.message || 'Failed to process account creation.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Google Sign-In with friendly domain handling
+  // Google Sign-In with mandatory password check for existing accounts
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
     setErrorMsg(null);
@@ -231,7 +140,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
 
     try {
       const user = await signInWithGoogle();
-      if (user) {
+      if (!user) return;
+
+      const userEmail = user.email ? user.email.toLowerCase() : '';
+      if (!userEmail) {
+        onSuccess(user);
+        onClose();
+        return;
+      }
+
+      // Check if this account already has an established password in Firebase
+      const status = await getGoogleAccountStatus(userEmail);
+
+      if (status.hasPassword) {
+        // User already has a registered password -> require password verification before granting access
+        setGooglePendingUser(user);
+        setIsLoading(false);
+      } else {
+        // First-time Google user -> proceed to onboarding to choose unique username and create password
         onSuccess(user);
         onClose();
       }
@@ -240,18 +166,70 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
       if (err.code === 'auth/unauthorized-domain') {
         setShowDomainHelp(true);
         setErrorMsg(
-          `Firebase Google Sign-In requires "${window.location.hostname}" to be whitelisted under Authorized Domains in your Firebase Console. Please use Email + OTP login below which works on all devices and domains!`
+          `Firebase Google Sign-In requires "${window.location.hostname}" to be whitelisted under Authorized Domains in Firebase Console. You can also sign in or register with Email/Username below immediately!`
         );
       } else if (err.code === 'auth/popup-blocked') {
-        setErrorMsg('Sign-in popup was blocked by your browser. Please allow popups or use Email + OTP login below.');
+        setErrorMsg('Sign-in popup was blocked by your browser. Please allow popups or use Email/Username.');
       } else if (err.code === 'auth/popup-closed-by-user') {
-        setErrorMsg('Sign-in was cancelled. Click Continue with Google to try again or use Email + OTP.');
+        setErrorMsg('Google sign-in was cancelled.');
       } else {
-        setErrorMsg(err.message || 'Google sign-in could not be completed. Please use Email + OTP.');
+        setErrorMsg(err.message || 'Google sign-in could not be completed.');
       }
+      setIsLoading(false);
+    }
+  };
+
+  // Verify password for Google authenticated user
+  const handleVerifyGooglePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!googlePendingUser || !googlePendingUser.email) return;
+
+    if (!googlePassword) {
+      setErrorMsg('Please enter your account password.');
+      return;
+    }
+
+    setIsLoading(true);
+    setErrorMsg(null);
+
+    try {
+      await verifyAccountPassword(googlePendingUser.email, googlePassword);
+      try {
+        sessionStorage.setItem('google_pass_verified_' + googlePendingUser.uid, 'true');
+      } catch {}
+      setSuccessMsg('Password verified! Entering canvas...');
+      setTimeout(() => {
+        onSuccess(googlePendingUser);
+        onClose();
+      }, 350);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Incorrect password. Access denied.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Cancel Google password check and sign out
+  const handleCancelGooglePassword = async () => {
+    try {
+      if (googlePendingUser) {
+        sessionStorage.removeItem('google_pass_verified_' + googlePendingUser.uid);
+      }
+      await fbSignOut(auth);
+      localStorage.removeItem('million_canvas_active_user');
+      localStorage.removeItem('million_canvas_active_profile');
+    } catch {}
+    setGooglePendingUser(null);
+    setGooglePassword('');
+    setErrorMsg(null);
+  };
+
+  // Close entire modal
+  const handleCloseModal = async () => {
+    if (googlePendingUser) {
+      await handleCancelGooglePassword();
+    }
+    onClose();
   };
 
   return (
@@ -265,8 +243,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         <div className="flex items-start justify-between gap-2 border-b-[2px] border-black pb-3 mb-4">
           <div className="flex items-center gap-2.5">
             <div className="bg-[#FFE169] border-[2px] border-black shadow-[2px_2px_0px_#000] p-2 rounded-xl">
-              {step === 'otp' ? (
-                <KeyRound className="w-5 h-5 text-black" />
+              {googlePendingUser ? (
+                <Lock className="w-5 h-5 text-black" />
               ) : tab === 'signup' ? (
                 <UserPlus className="w-5 h-5 text-black" />
               ) : (
@@ -275,23 +253,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
             </div>
             <div>
               <h2 className="font-extrabold text-lg sm:text-xl font-mono text-black uppercase">
-                {step === 'otp'
-                  ? 'VERIFY EMAIL CODE'
+                {googlePendingUser
+                  ? 'VERIFY ACCOUNT PASSWORD'
                   : tab === 'signup'
                   ? 'CREATE ARTIST ACCOUNT'
                   : 'SIGN IN TO CANVAS'}
               </h2>
               <p className="text-xs text-gray-600 font-mono">
-                {step === 'otp'
-                  ? 'Enter the 6-digit passcode sent to your email'
+                {googlePendingUser
+                  ? 'Enter password to unlock your Google session'
                   : tab === 'signup'
-                  ? 'Sign up with email to claim canvas territory'
-                  : 'Enter your credentials to access your plots'}
+                  ? 'Register with email to claim canvas territory'
+                  : 'Log in with your username or email & password'}
               </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="text-black hover:bg-black/10 p-1 rounded-lg transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -309,6 +287,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                   <button
                     type="button"
                     onClick={() => {
+                      setIdentifier(signupEmail);
                       setTab('signin');
                       setErrorMsg(null);
                     }}
@@ -318,11 +297,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                   </button>
                 </div>
               )}
-              {errorMsg.includes('No account found') && tab === 'signin' && (
+              {errorMsg.includes('create an account') && tab === 'signin' && (
                 <div className="pt-1">
                   <button
                     type="button"
                     onClick={() => {
+                      if (identifier.includes('@')) {
+                        setSignupEmail(identifier);
+                      }
                       setTab('signup');
                       setErrorMsg(null);
                     }}
@@ -336,12 +318,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
           </div>
         )}
 
-        {/* Domain Whitelist Instructions */}
+        {/* Domain Whitelist Help */}
         {showDomainHelp && (
           <div className="mb-4 bg-amber-50 border-[2px] border-amber-800 text-amber-900 text-xs p-3 rounded-xl space-y-1.5 font-mono">
             <div className="flex items-center gap-1.5 font-bold">
               <ShieldAlert className="w-4 h-4 text-amber-700" />
-              <span>How to Enable Google Sign-In on this Domain:</span>
+              <span>Google Sign-In Domain Configuration:</span>
             </div>
             <p className="text-[11px] text-gray-700">
               In Firebase Console → Authentication → Settings → Authorized Domains, add:
@@ -349,14 +331,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
             <code className="block bg-white p-1.5 rounded border border-amber-300 font-bold select-all text-black">
               {window.location.hostname}
             </code>
-            <p className="text-[10px] text-gray-600">
-              Email + OTP login works right now without any domain restrictions!
-            </p>
           </div>
         )}
 
         {/* Success Notification */}
-        {successMsg && !errorMsg && (
+        {successMsg && (
           <div className="mb-4 bg-emerald-50 border-[2px] border-emerald-800 text-emerald-900 text-xs font-bold p-3 rounded-xl flex items-start gap-2 animate-in fade-in duration-200">
             <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <div className="flex-1">
@@ -366,9 +345,82 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
         )}
 
         {/* ========================================================= */}
-        {/* STEP 1: CREDENTIALS (Sign In vs Create Account) */}
+        {/* CASE A: GOOGLE PENDING PASSWORD VERIFICATION */}
         {/* ========================================================= */}
-        {step === 'credentials' ? (
+        {googlePendingUser ? (
+          <form onSubmit={handleVerifyGooglePassword} className="space-y-4">
+            <div className="bg-[#FFE169]/30 border-[2px] border-black p-3 rounded-xl">
+              <div className="flex items-center justify-between text-xs font-mono font-bold text-black mb-1">
+                <span>Google Account Verified:</span>
+                <span className="text-green-700 flex items-center gap-1">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Ready
+                </span>
+              </div>
+              <div className="text-xs font-mono font-black text-gray-800 break-all">
+                {googlePendingUser.email}
+              </div>
+              <p className="text-[10px] text-gray-600 font-mono mt-1.5">
+                For heightened security, enter your account password to unlock your canvas session.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
+                Account Password *
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
+                <input
+                  type={showGooglePassword ? 'text' : 'password'}
+                  required
+                  autoFocus
+                  value={googlePassword}
+                  onChange={(e) => setGooglePassword(e.target.value)}
+                  placeholder="Enter your account password"
+                  className="w-full pl-9 pr-9 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowGooglePassword(!showGooglePassword)}
+                  className="absolute right-3 top-2.5 text-gray-500 hover:text-black cursor-pointer"
+                >
+                  {showGooglePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handleCancelGooglePassword}
+                disabled={isLoading}
+                className="flex-1 bg-white hover:bg-gray-100 border-[2px] border-black shadow-[2px_2px_0px_#000] py-2.5 rounded-xl text-xs font-extrabold text-black cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="flex-2 bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Verifying...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Verify & Enter</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        ) : (
+          /* ========================================================= */
+          /* CASE B: STANDARD SIGN IN OR CREATE ACCOUNT */
+          /* ========================================================= */
           <div>
             {/* Tab Switcher */}
             <div className="flex bg-gray-200 border-[2px] border-black rounded-xl p-1 mb-4">
@@ -404,45 +456,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               </button>
             </div>
 
-            {/* Credential Form */}
-            <form onSubmit={handleCredentialsSubmit} className="space-y-3.5 mb-4">
-              <div>
-                <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
-                  Email Address *
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="artist@canvas.io"
-                    className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
-                  />
-                </div>
-                {tab === 'signup' && (
+            {/* TAB 1: SIGN IN (EMAIL OR USERNAME + PASSWORD, NO OTP) */}
+            {tab === 'signin' ? (
+              <form onSubmit={handleSignInSubmit} className="space-y-3.5 mb-4">
+                <div>
+                  <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
+                    Email Address or Username *
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
+                    <input
+                      id="input-login-identifier"
+                      type="text"
+                      required
+                      value={identifier}
+                      onChange={(e) => setIdentifier(e.target.value)}
+                      placeholder="artist@canvas.io or @username"
+                      className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                    />
+                  </div>
                   <p className="text-[10px] text-gray-500 font-mono mt-1">
-                    We will send a real 6-digit OTP code to verify your email. Password is set on the next screen.
+                    Enter either your registered email or @username.
                   </p>
-                )}
-              </div>
+                </div>
 
-              {/* Password field: ONLY shown on Sign In for security */}
-              {tab === 'signin' && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[11px] font-extrabold font-mono uppercase text-black">
                       Account Password *
                     </label>
-                    <span className="text-[10px] font-mono text-gray-500">Required</span>
                   </div>
                   <div className="relative">
                     <Lock className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
                     <input
+                      id="input-login-password"
                       type={showPassword ? 'text' : 'password'}
                       required
-                      minLength={6}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Enter your account password"
@@ -457,31 +506,70 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
                     </button>
                   </div>
                 </div>
-              )}
 
-              <button
-                id="btn-auth-email-otp"
-                type="submit"
-                disabled={isLoading}
-                className="w-full bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 transition-transform cursor-pointer"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Processing & Dispatching Code...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>
-                      {tab === 'signin'
-                        ? 'Sign In & Send Security OTP'
-                        : 'Send Verification Code'}
-                    </span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </form>
+                <button
+                  id="btn-submit-signin"
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-[#4ECDC4] hover:bg-teal-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 transition-transform cursor-pointer"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Signing In...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Sign In to Canvas</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : (
+              /* TAB 2: CREATE ACCOUNT (EMAIL -> ONBOARDING) */
+              <form onSubmit={handleSignUpSubmit} className="space-y-3.5 mb-4">
+                <div>
+                  <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-1">
+                    Your Email Address *
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 absolute left-3 top-2.5 text-gray-500" />
+                    <input
+                      id="input-signup-email"
+                      type="email"
+                      required
+                      value={signupEmail}
+                      onChange={(e) => setSignupEmail(e.target.value)}
+                      placeholder="artist@canvas.io"
+                      className="w-full pl-9 pr-3 py-2 bg-white border-[2px] border-black rounded-xl text-xs font-bold text-black focus:bg-yellow-50 focus:outline-hidden"
+                    />
+                  </div>
+                  <p className="text-[10px] text-gray-500 font-mono mt-1">
+                    On the next screen, you'll choose your unique username, display name, and account password.
+                  </p>
+                </div>
+
+                <button
+                  id="btn-submit-signup"
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-[#FFE169] hover:bg-yellow-300 disabled:opacity-60 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-2.5 rounded-xl text-xs font-black text-black flex items-center justify-center gap-2 transition-transform cursor-pointer"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Checking Account...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Continue to Profile & Password Setup</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
 
             {/* Divider */}
             <div className="relative my-4">
@@ -522,153 +610,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
               <span>Continue with Google</span>
             </button>
           </div>
-        ) : (
-          /* ========================================================= */
-          /* STEP 2: OTP VERIFICATION */
-          /* ========================================================= */
-          <div>
-            {/* Back button and target email header */}
-            <div className="flex items-center justify-between mb-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setStep('credentials');
-                  setErrorMsg(null);
-                }}
-                className="flex items-center gap-1 text-xs font-bold text-gray-700 hover:text-black cursor-pointer font-mono"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Edit email {tab === 'signin' ? 'or password' : ''}</span>
-              </button>
-              <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded border border-amber-300">
-                Email OTP
-              </span>
-            </div>
-
-            {/* Prominent Live OTP Notification Card */}
-            <div className="bg-[#FFE169]/40 border-[2.5px] border-black rounded-xl p-3.5 mb-4 shadow-[3px_3px_0px_#000]">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-black font-mono uppercase tracking-wider text-black flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                  Verification Dispatch Active
-                </span>
-                <span className="text-[9px] font-mono bg-white px-1.5 py-0.5 rounded border border-black font-bold">
-                  {email}
-                </span>
-              </div>
-
-              {generatedOtp && (
-                <div className="bg-white border-[2px] border-black rounded-lg p-2.5 flex items-center justify-between gap-2 mt-2">
-                  <div>
-                    <div className="text-[10px] text-gray-600 font-mono">6-Digit Code:</div>
-                    <div className="text-xl font-black font-mono tracking-widest text-black">
-                      {generatedOtp}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleCopyOtp}
-                      className="bg-gray-100 hover:bg-gray-200 border border-black p-1.5 rounded-md text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Copy OTP"
-                    >
-                      {hasCopiedOtp ? (
-                        <Check className="w-3.5 h-3.5 text-green-600" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5 text-black" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleAutoFillOtp}
-                      className="bg-[#10AC84] hover:bg-emerald-600 text-white border border-black px-2 py-1.5 rounded-md text-[11px] font-black flex items-center gap-1 cursor-pointer transition-colors"
-                    >
-                      <Zap className="w-3.5 h-3.5" />
-                      <span>Auto-Fill</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <p className="text-[10px] text-gray-600 font-mono mt-2">
-                Code expires in 10 minutes. Enter the code below to proceed.
-              </p>
-            </div>
-
-            {/* 6-Digit Input Box Grid */}
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
-              <div>
-                <label className="block text-[11px] font-extrabold font-mono uppercase text-black mb-2 text-center">
-                  Enter 6-Digit Verification Code
-                </label>
-                <div className="flex justify-between gap-1.5 sm:gap-2" onPaste={handleOtpPaste}>
-                  {otpDigits.map((digit, idx) => (
-                    <input
-                      key={idx}
-                      ref={(el) => {
-                        inputRefs.current[idx] = el;
-                      }}
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={1}
-                      value={digit}
-                      onChange={(e) => handleOtpChange(idx, e.target.value)}
-                      onKeyDown={(e) => handleOtpKeyDown(idx, e)}
-                      className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-black font-mono bg-white border-[2.5px] border-black rounded-xl shadow-[2px_2px_0px_#000] focus:bg-yellow-100 focus:outline-hidden"
-                    />
-                  ))}
-                </div>
-              </div>
-
-              {/* Verify Button */}
-              <button
-                id="btn-verify-otp"
-                type="submit"
-                disabled={isLoading || otpDigits.join('').length !== 6}
-                className="w-full bg-[#10AC84] hover:bg-emerald-500 disabled:opacity-50 active:translate-x-0.5 active:translate-y-0.5 border-[2.5px] border-black shadow-[3px_3px_0px_#000] py-3 rounded-xl text-xs font-black text-white flex items-center justify-center gap-2 transition-transform cursor-pointer"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Verifying Code...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle className="w-4 h-4" />
-                    <span>
-                      {tab === 'signup'
-                        ? 'Verify Email & Setup Profile'
-                        : 'Verify & Sign In to Canvas'}
-                    </span>
-                  </>
-                )}
-              </button>
-
-              {/* Resend Code Section */}
-              <div className="flex items-center justify-between pt-2 text-xs font-mono">
-                <span className="text-gray-600">Didn't receive the code?</span>
-                <button
-                  type="button"
-                  disabled={resendCooldown > 0 || isLoading}
-                  onClick={handleResendOtp}
-                  className="font-bold text-black hover:underline disabled:text-gray-400 flex items-center gap-1 cursor-pointer"
-                >
-                  <RotateCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-                  {resendCooldown > 0 ? (
-                    <span>Resend in {resendCooldown}s</span>
-                  ) : (
-                    <span>Resend OTP</span>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
         )}
 
         {/* Small informational footer */}
-        <div className="mt-4 pt-3 border-t border-black/10 flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
-          <Info className="w-3 h-3 shrink-0 text-gray-400" />
-          <span>Real-time authenticated state with Firebase Cloud Firestore.</span>
+        <div className="mt-4 pt-3 border-t border-black/10 flex items-center justify-between text-[10px] text-gray-500 font-mono">
+          <span>Encrypted with SHA-256</span>
+          <span>Cloud Firestore Persistence</span>
         </div>
       </div>
     </div>
