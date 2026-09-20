@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   Trophy,
-  Search,
   HelpCircle,
   LogIn,
   LogOut,
@@ -19,7 +18,7 @@ interface NavbarProps {
   onLogin: () => void;
   onLogout: () => void;
   onOpenLeaderboard: () => void;
-  onOpenSearch: () => void;
+  onOpenSearch?: () => void;
   onOpenHowItWorks: () => void;
   onOpenMonetizationGuide: () => void;
   onOpenMyPlots: () => void;
@@ -52,44 +51,24 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Brand & Concept */}
       <div className="flex items-center gap-3">
         <div className="bg-[#FFE169] border-[2.5px] border-black shadow-[3px_3px_0px_#000] px-3 py-1.5 rounded-xl flex items-center gap-2">
-          <div className="w-3 h-3 bg-[#FF6B6B] border border-black rounded-xs animate-pulse" />
-          <span className="font-extrabold text-sm sm:text-base tracking-tight font-mono text-black uppercase">
-            Million Dollar Canvas
-          </span>
-          <span className="hidden sm:inline-block bg-[#4ECDC4] text-black text-[10px] font-bold px-1.5 py-0.5 rounded border border-black">
-            1M PIXELS
+          <div className="w-2.5 h-2.5 bg-[#FF6B6B] border border-black rounded-xs animate-pulse" />
+          <span className="font-extrabold text-xs sm:text-sm tracking-tight font-mono text-black uppercase">
+            1M Pixels Canvas | 0.50$ each
           </span>
         </div>
 
-        {/* Live Metrics Pill */}
+        {/* Live Metrics Pill - Claimed amount / total (percentage) only */}
         <div className="hidden lg:flex items-center gap-2 bg-white border-[2px] border-black shadow-[2px_2px_0px_#000] px-3 py-1.5 rounded-xl text-xs font-semibold">
           <Layers className="w-3.5 h-3.5 text-[#5F27CD]" />
           <span className="text-gray-600">Claimed:</span>
           <span className="font-mono font-bold text-black">
-            {totalClaimedPixels.toLocaleString()} / 1,000,000 px ({percentageClaimed}%)
+            {totalClaimedPixels.toLocaleString()} / 1,000,000 ({percentageClaimed}%)
           </span>
-          <span className="text-gray-300">|</span>
-          <span className="bg-[#FFE169] text-black font-bold px-1.5 py-0.5 rounded border border-black text-[11px]">
-            $0.50 / px (2 px = $1)
-          </span>
-          <span className="text-gray-300">|</span>
-          <span className="text-[#10AC84] font-bold">Valuation: {totalValuation}</span>
         </div>
       </div>
 
       {/* Nav Actions */}
       <div className="flex items-center gap-2 sm:gap-2.5">
-        {/* Search Coordinates */}
-        <button
-          id="btn-nav-search"
-          onClick={onOpenSearch}
-          title="Search Coordinates (X, Y) or Plots"
-          className="bg-white hover:bg-yellow-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-transform"
-        >
-          <Search className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Coordinates</span>
-        </button>
-
         {/* Top 50 Leaderboard */}
         <button
           id="btn-nav-leaderboard"
@@ -100,25 +79,24 @@ export const Navbar: React.FC<NavbarProps> = ({
           <span>Top 50</span>
         </button>
 
-        {/* How It Works */}
+        {/* How It Works - Icon Only */}
         <button
           id="btn-nav-how-it-works"
           onClick={onOpenHowItWorks}
-          className="hidden md:flex bg-white hover:bg-gray-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] px-2.5 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-transform"
+          title="How It Works"
+          className="bg-white hover:bg-gray-50 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] p-1.5 sm:px-2 rounded-xl text-xs font-bold flex items-center justify-center transition-transform"
         >
-          <HelpCircle className="w-3.5 h-3.5 text-blue-600" />
-          <span>How It Works</span>
+          <HelpCircle className="w-4 h-4 text-blue-600" />
         </button>
 
-        {/* International Monetization Guide for Owner */}
+        {/* International Monetization Guide for Owner - Symbol Only */}
         <button
           id="btn-nav-monetization"
           onClick={onOpenMonetizationGuide}
-          className="bg-[#A388EE] hover:bg-purple-300 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] px-2.5 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-transform text-black"
-          title="International Payments & Earning Guide"
+          className="bg-[#A388EE] hover:bg-purple-300 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] p-1.5 sm:px-2 rounded-xl text-xs font-extrabold flex items-center justify-center transition-transform text-black"
+          title="Earn Money Guide"
         >
-          <DollarSign className="w-3.5 h-3.5 text-black" />
-          <span className="hidden sm:inline">Earn Money Guide</span>
+          <DollarSign className="w-4 h-4 text-black" />
         </button>
 
         {/* User Account / Profile */}

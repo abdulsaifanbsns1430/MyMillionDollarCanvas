@@ -66,6 +66,159 @@ export function rectsOverlap(r1: Rect, r2: Rect): boolean {
   return checkCollision(r1.x, r1.y, r1.width, r1.height, r2.x, r2.y, r2.width, r2.height);
 }
 
+// Check if two rectangles touch or overlap (Chebyshev distance <= 1 px)
+export function rectsTouchOrOverlap(r1: Rect, r2: Rect): boolean {
+  return (
+    r1.x <= r2.x + r2.width &&
+    r1.x + r1.width >= r2.x &&
+    r1.y <= r2.y + r2.height &&
+    r1.y + r1.height >= r2.y
+  );
+}
+
+// Group touching/adjacent rectangles into connected components
+export function groupConnectedRectangles(rects: Rect[]): Rect[][] {
+  if (rects.length <= 1) return rects.map((r) => [r]);
+
+  const n = rects.length;
+  const visited = new Array(n).fill(false);
+  const groups: Rect[][] = [];
+
+  for (let i = 0; i < n; i++) {
+    if (visited[i]) continue;
+    const group: Rect[] = [];
+    const queue: number[] = [i];
+    visited[i] = true;
+
+    while (queue.length > 0) {
+      const curIdx = queue.shift()!;
+      group.push(rects[curIdx]);
+
+      for (let j = 0; j < n; j++) {
+        if (!visited[j] && rectsTouchOrOverlap(rects[curIdx], rects[j])) {
+          visited[j] = true;
+          queue.push(j);
+        }
+      }
+    }
+    groups.push(group);
+  }
+
+  return groups;
+}
+
+export interface BoundarySegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+// Compute only the external perimeter boundary edges of the union of all rectangles,
+// eliminating all internal divider lines between touching/adjacent rectangles!
+export function computeSelectionBoundarySegments(regions: Rect[]): BoundarySegment[] {
+  if (!regions || regions.length === 0) return [];
+
+  const pixelSet = new Set<string>();
+  for (const r of regions) {
+    for (let py = r.y; py < r.y + r.height; py++) {
+      for (let px = r.x; px < r.x + r.width; px++) {
+        pixelSet.add(`${px},${py}`);
+      }
+    }
+  }
+
+  const hEdges = new Map<string, boolean>();
+  const vEdges = new Map<string, boolean>();
+
+  for (const key of pixelSet) {
+    const comma = key.indexOf(',');
+    const px = Number(key.substring(0, comma));
+    const py = Number(key.substring(comma + 1));
+
+    // Top edge at y = py
+    if (!pixelSet.has(`${px},${py - 1}`)) {
+      hEdges.set(`${py}:${px}`, true);
+    }
+    // Bottom edge at y = py + 1
+    if (!pixelSet.has(`${px},${py + 1}`)) {
+      hEdges.set(`${py + 1}:${px}`, true);
+    }
+    // Left edge at x = px
+    if (!pixelSet.has(`${px - 1},${py}`)) {
+      vEdges.set(`${px}:${py}`, true);
+    }
+    // Right edge at x = px + 1
+    if (!pixelSet.has(`${px + 1},${py}`)) {
+      vEdges.set(`${px + 1}:${py}`, true);
+    }
+  }
+
+  const hSegments: { y: number; x1: number; x2: number }[] = [];
+  const vSegments: { x: number; y1: number; y2: number }[] = [];
+
+  // Group horizontal edges by Y coordinate
+  const hByY = new Map<number, number[]>();
+  for (const edgeKey of hEdges.keys()) {
+    const colon = edgeKey.indexOf(':');
+    const y = Number(edgeKey.substring(0, colon));
+    const x = Number(edgeKey.substring(colon + 1));
+    if (!hByY.has(y)) hByY.set(y, []);
+    hByY.get(y)!.push(x);
+  }
+
+  for (const [y, xs] of hByY.entries()) {
+    xs.sort((a, b) => a - b);
+    let startX = xs[0];
+    let prevX = xs[0];
+    for (let i = 1; i < xs.length; i++) {
+      if (xs[i] === prevX + 1) {
+        prevX = xs[i];
+      } else {
+        hSegments.push({ y, x1: startX, x2: prevX + 1 });
+        startX = xs[i];
+        prevX = xs[i];
+      }
+    }
+    hSegments.push({ y, x1: startX, x2: prevX + 1 });
+  }
+
+  // Group vertical edges by X coordinate
+  const vByX = new Map<number, number[]>();
+  for (const edgeKey of vEdges.keys()) {
+    const colon = edgeKey.indexOf(':');
+    const x = Number(edgeKey.substring(0, colon));
+    const y = Number(edgeKey.substring(colon + 1));
+    if (!vByX.has(x)) vByX.set(x, []);
+    vByX.get(x)!.push(y);
+  }
+
+  for (const [x, ys] of vByX.entries()) {
+    ys.sort((a, b) => a - b);
+    let startY = ys[0];
+    let prevY = ys[0];
+    for (let i = 1; i < ys.length; i++) {
+      if (ys[i] === prevY + 1) {
+        prevY = ys[i];
+      } else {
+        vSegments.push({ x, y1: startY, y2: prevY + 1 });
+        startY = ys[i];
+        prevY = ys[i];
+      }
+    }
+    vSegments.push({ x, y1: startY, y2: prevY + 1 });
+  }
+
+  const result: BoundarySegment[] = [];
+  for (const h of hSegments) {
+    result.push({ x1: h.x1, y1: h.y, x2: h.x2, y2: h.y });
+  }
+  for (const v of vSegments) {
+    result.push({ x1: v.x, y1: v.y1, x2: v.x, y2: v.y2 });
+  }
+  return result;
+}
+
 // Subtract rectangle B from rectangle A, returning non-overlapping sub-rectangles
 export function subtractRect(A: Rect, B: Rect): Rect[] {
   if (!rectsOverlap(A, B)) {
@@ -188,14 +341,14 @@ export function applyDragSelection(
   // Determine resulting rects
   let resultingRects: Rect[] = [];
 
-  if (forceAction === 'remove' || dragStartedInside) {
-    // Unselect mode: subtract drag rect from existing regions
+  if (forceAction === 'remove') {
+    // Unselect/Erase mode: subtract drag rect from existing regions
     resultingRects = subtractRects(
       existingRegions.map((r) => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
       [rawDragRect]
     );
-  } else if (forceAction === 'add') {
-    // Pure add mode: add free pieces not already selected
+  } else {
+    // Add mode (Default): Always add/union new unowned pixels without unselecting existing selections!
     const nonDuplicatePieces = subtractRects(
       freePieces,
       existingRegions.map((r) => ({ x: r.x, y: r.y, width: r.width, height: r.height }))
@@ -204,29 +357,6 @@ export function applyDragSelection(
       ...existingRegions.map((r) => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
       ...nonDuplicatePieces,
     ];
-  } else {
-    // Dynamic Mode:
-    // If dragging over already selected pixels: unselect them!
-    // If dragging over unselected areas: add them!
-    if (hasOverlapWithExisting) {
-      // 1. Subtract drag rect from existing regions (unselect overlapping selected pixels)
-      const survivingExisting = subtractRects(
-        existingRegions.map((r) => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
-        [rawDragRect]
-      );
-      // 2. Add any free unselected pieces in the drag rectangle that were NOT previously selected
-      const newPiecesToAdd = subtractRects(
-        freePieces,
-        existingRegions.map((r) => ({ x: r.x, y: r.y, width: r.width, height: r.height }))
-      );
-      resultingRects = [...survivingExisting, ...newPiecesToAdd];
-    } else {
-      // Dragged over an area with no existing selection: add this new area
-      resultingRects = [
-        ...existingRegions.map((r) => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
-        ...freePieces,
-      ];
-    }
   }
 
   // Filter out any zero-sized rectangles
@@ -247,6 +377,8 @@ export function applyDragSelection(
   }));
 
   const totalValidPixels = updatedRegions.reduce((sum, r) => sum + r.pixelCount, 0);
+  const connectedGroups = groupConnectedRectangles(validRects);
+  const connectedAreaCount = connectedGroups.length;
   const boundingBox = computeBoundingBox(updatedRegions, minX, minY, width, height);
 
   let notificationMessage: string | undefined = undefined;
@@ -266,6 +398,7 @@ export function applyDragSelection(
     width: boundingBox.width,
     height: boundingBox.height,
     regions: updatedRegions,
+    connectedAreaCount,
     pixelCount: totalValidPixels,
     cost: totalValidPixels * PRICE_PER_PIXEL,
     hasCollision: false,

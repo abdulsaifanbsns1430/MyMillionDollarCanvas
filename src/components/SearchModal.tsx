@@ -128,7 +128,9 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 <div
                   key={plot.id}
                   onClick={() => {
-                    onJumpTo(plot.x, plot.y);
+                    const centerX = plot.x + plot.width / 2;
+                    const centerY = plot.y + plot.height / 2;
+                    onJumpTo(centerX, centerY);
                     onSelectPlot(plot);
                     onClose();
                   }}

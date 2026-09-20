@@ -94,7 +94,9 @@ export const MyPlotsModal: React.FC<MyPlotsModalProps> = ({
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     onClick={() => {
-                      onJumpTo(plot.x, plot.y);
+                      const centerX = plot.x + plot.width / 2;
+                      const centerY = plot.y + plot.height / 2;
+                      onJumpTo(centerX, centerY);
                       onClose();
                     }}
                     title="Jump on Canvas"

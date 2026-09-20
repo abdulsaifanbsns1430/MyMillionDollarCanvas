@@ -54,6 +54,7 @@ export interface PixelSelection {
   y: number;
   // Multi-region support
   regions: SelectionRegion[];
+  connectedAreaCount?: number;
   pixelCount: number;
   cost: number;
   hasCollision?: boolean;

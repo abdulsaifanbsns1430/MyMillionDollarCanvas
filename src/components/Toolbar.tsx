@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Hand,
   MousePointer,
@@ -10,7 +10,11 @@ import {
   Plus,
   Minus,
   CheckCircle2,
+  SlidersHorizontal,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { PixelSelection, ViewportState } from '../types';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../lib/canvasUtils';
 
@@ -41,6 +45,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   containerWidth,
   containerHeight,
 }) => {
+  const [isVisible, setIsVisible] = useState(true);
+
   const handleZoomIn = () => {
     const newZoom = Math.min(32, viewport.zoom * 1.3);
     onViewportChange({
@@ -77,107 +83,158 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       aria-label="Canvas editing controls"
       className="absolute top-3 sm:top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 select-none pointer-events-auto max-w-[95vw]"
     >
-      {/* Primary Tool Bar */}
-      <div className="bg-[#FAF8F5] border-[2.5px] border-black shadow-[4px_4px_0px_#000] p-1.5 rounded-2xl flex items-center gap-1 sm:gap-2 overflow-x-auto">
-        {/* Pan Mode (Default) */}
-        <button
-          id="btn-tool-pan"
-          onClick={() => onModeChange('pan')}
-          title="Pan & Explore Canvas"
-          className={`px-3 py-1.5 rounded-xl border-[2px] border-black font-extrabold text-xs flex items-center gap-1.5 transition-all ${
-            mode === 'pan'
-              ? 'bg-[#FFE169] shadow-[2px_2px_0px_#000] translate-x-0.5 translate-y-0.5'
-              : 'bg-white hover:bg-gray-50'
-          }`}
-        >
-          <Hand className="w-3.5 h-3.5 text-black" />
-          <span>Pan</span>
-        </button>
-
-        {/* Select Mode */}
-        <button
-          id="btn-tool-select"
-          onClick={() => onModeChange('select')}
-          title="Drag mouse/finger to Select Pixels"
-          className={`px-3 py-1.5 rounded-xl border-[2px] border-black font-extrabold text-xs flex items-center gap-1.5 transition-all ${
-            mode === 'select'
-              ? 'bg-[#4ECDC4] shadow-[2px_2px_0px_#000] translate-x-0.5 translate-y-0.5'
-              : 'bg-white hover:bg-gray-50'
-          }`}
-        >
-          <MousePointer className="w-3.5 h-3.5 text-black" />
-          <span>Select Pixels</span>
-        </button>
-
-        {/* If in select mode: Toggle between Add and Erase Area */}
-        {mode === 'select' && (
-          <div className="flex items-center bg-gray-200 border-[1.5px] border-black rounded-xl p-0.5 ml-1">
+      {/* Expanding & Popping Toolbar / Toggle Button */}
+      <AnimatePresence mode="wait">
+        {!isVisible ? (
+          <motion.button
+            key="toolbar-collapsed-btn"
+            id="btn-toggle-toolbar-open"
+            initial={{ scale: 0.7, opacity: 0, y: -10 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.7, opacity: 0, y: -10 }}
+            whileHover={{ scale: 1.06 }}
+            whileTap={{ scale: 0.94 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+            onClick={() => setIsVisible(true)}
+            title="Show Canvas Toolbar"
+            className="bg-[#FFE169] hover:bg-yellow-300 border-[2.5px] border-black shadow-[3px_3px_0px_#000] px-4 py-1.5 rounded-2xl flex items-center gap-2 text-xs font-black text-black cursor-pointer tracking-tight uppercase"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-black" />
+            <span>Toolbar</span>
+            <ChevronDown className="w-3.5 h-3.5 text-black stroke-[3]" />
+          </motion.button>
+        ) : (
+          <motion.div
+            key="toolbar-expanded-panel"
+            initial={{ scale: 0.85, opacity: 0, y: -10 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.85, opacity: 0, y: -10 }}
+            transition={{ type: 'spring', stiffness: 450, damping: 25 }}
+            className="bg-[#FAF8F5] border-[2.5px] border-black shadow-[4px_4px_0px_#000] p-1.5 rounded-2xl flex items-center gap-1 sm:gap-2 overflow-x-auto"
+          >
+            {/* Pan Mode */}
             <button
-              id="btn-subtool-add"
-              onClick={() => onSelectionActionChange('add')}
-              title="Add more pixels or multiple areas"
-              className={`px-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all ${
-                selectionAction === 'add'
-                  ? 'bg-white text-black border border-black shadow-[1px_1px_0px_#000]'
-                  : 'text-gray-600 hover:text-black'
+              id="btn-tool-pan"
+              onClick={() => onModeChange('pan')}
+              title="Pan & Explore Canvas"
+              className={`px-3 py-1.5 rounded-xl border-[2px] border-black font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                mode === 'pan'
+                  ? 'bg-[#FFE169] shadow-[2px_2px_0px_#000] translate-x-0.5 translate-y-0.5'
+                  : 'bg-white hover:bg-gray-50'
               }`}
             >
-              <Plus className="w-3 h-3 text-emerald-600" />
-              <span>Add</span>
+              <Hand className="w-3.5 h-3.5 text-black" />
+              <span>Pan</span>
             </button>
+
+            {/* Select Mode */}
             <button
-              id="btn-subtool-remove"
-              onClick={() => onSelectionActionChange('remove')}
-              title="Drag over already selected pixels to remove/erase them"
-              className={`px-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all ${
-                selectionAction === 'remove'
-                  ? 'bg-[#FF6B6B] text-black border border-black shadow-[1px_1px_0px_#000]'
-                  : 'text-gray-600 hover:text-black'
+              id="btn-tool-select"
+              onClick={() => onModeChange('select')}
+              title="Drag mouse/finger to Select Pixels"
+              className={`px-3 py-1.5 rounded-xl border-[2px] border-black font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                mode === 'select'
+                  ? 'bg-[#4ECDC4] shadow-[2px_2px_0px_#000] translate-x-0.5 translate-y-0.5'
+                  : 'bg-white hover:bg-gray-50'
               }`}
             >
-              <Minus className="w-3 h-3 text-black" />
-              <span>Erase</span>
+              <MousePointer className="w-3.5 h-3.5 text-black" />
+              <span>Select Pixels</span>
             </button>
-          </div>
+
+            {/* If in select mode: Toggle between Add and Erase Area */}
+            {mode === 'select' && (
+              <div className="flex items-center bg-gray-200 border-[1.5px] border-black rounded-xl p-0.5 ml-1">
+                <button
+                  id="btn-subtool-add"
+                  onClick={() => onSelectionActionChange('add')}
+                  title="Add more pixels or multiple areas"
+                  className={`px-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all cursor-pointer ${
+                    selectionAction === 'add'
+                      ? 'bg-white text-black border border-black shadow-[1px_1px_0px_#000]'
+                      : 'text-gray-600 hover:text-black'
+                  }`}
+                >
+                  <Plus className="w-3 h-3 text-emerald-600" />
+                  <span>Add</span>
+                </button>
+                <button
+                  id="btn-subtool-remove"
+                  onClick={() => onSelectionActionChange('remove')}
+                  title="Drag over already selected pixels to remove/erase them"
+                  className={`px-2 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 transition-all cursor-pointer ${
+                    selectionAction === 'remove'
+                      ? 'bg-[#FF6B6B] text-black border border-black shadow-[1px_1px_0px_#000]'
+                      : 'text-gray-600 hover:text-black'
+                  }`}
+                >
+                  <Minus className="w-3 h-3 text-black" />
+                  <span>Erase</span>
+                </button>
+              </div>
+            )}
+
+            <div className="h-5 w-[2px] bg-black/20 mx-0.5" />
+
+            {/* Zoom Controls */}
+            <button
+              id="btn-tool-zoom-in"
+              onClick={handleZoomIn}
+              title="Zoom In"
+              className="bg-white hover:bg-yellow-50 border-[2px] border-black p-1.5 rounded-xl transition-transform active:scale-95 cursor-pointer"
+            >
+              <ZoomIn className="w-3.5 h-3.5 text-black" />
+            </button>
+
+            <button
+              id="btn-tool-zoom-out"
+              onClick={handleZoomOut}
+              title="Zoom Out"
+              className="bg-white hover:bg-yellow-50 border-[2px] border-black p-1.5 rounded-xl transition-transform active:scale-95 cursor-pointer"
+            >
+              <ZoomOut className="w-3.5 h-3.5 text-black" />
+            </button>
+
+            <button
+              id="btn-tool-reset"
+              onClick={handleResetView}
+              title="Reset View to Center"
+              className="bg-white hover:bg-yellow-50 border-[2px] border-black p-1.5 rounded-xl transition-transform active:scale-95 text-xs font-bold font-mono cursor-pointer"
+            >
+              <Maximize className="w-3.5 h-3.5 text-black" />
+            </button>
+
+            <div className="h-5 w-[2px] bg-black/20 mx-0.5" />
+
+            {/* Toggle Toolbar Collapse Button */}
+            <button
+              id="btn-toggle-toolbar-close"
+              onClick={() => setIsVisible(false)}
+              title="Hide Toolbar"
+              className="bg-gray-100 hover:bg-yellow-200 border border-black p-1.5 rounded-xl text-black transition-all active:scale-90 flex items-center gap-1 text-[10px] font-mono font-bold cursor-pointer"
+            >
+              <ChevronUp className="w-3.5 h-3.5 stroke-[2.5]" />
+            </button>
+          </motion.div>
         )}
-
-        <div className="h-5 w-[2px] bg-black/20 mx-0.5" />
-
-        {/* Zoom Controls */}
-        <button
-          id="btn-tool-zoom-in"
-          onClick={handleZoomIn}
-          title="Zoom In"
-          className="bg-white hover:bg-yellow-50 border-[2px] border-black p-1.5 rounded-xl transition-transform active:scale-95"
-        >
-          <ZoomIn className="w-3.5 h-3.5 text-black" />
-        </button>
-
-        <button
-          id="btn-tool-zoom-out"
-          onClick={handleZoomOut}
-          title="Zoom Out"
-          className="bg-white hover:bg-yellow-50 border-[2px] border-black p-1.5 rounded-xl transition-transform active:scale-95"
-        >
-          <ZoomOut className="w-3.5 h-3.5 text-black" />
-        </button>
-
-        <button
-          id="btn-tool-reset"
-          onClick={handleResetView}
-          title="Reset View to Center"
-          className="bg-white hover:bg-yellow-50 border-[2px] border-black p-1.5 rounded-xl transition-transform active:scale-95 text-xs font-bold font-mono"
-        >
-          <Maximize className="w-3.5 h-3.5 text-black" />
-        </button>
-      </div>
+      </AnimatePresence>
 
       {/* Dynamic Selection Action Pill */}
       {selection && selection.pixelCount > 0 && (
-        <div className="bg-white border-[2.5px] border-black shadow-[4px_4px_0px_#000] p-2 rounded-2xl flex flex-wrap items-center justify-center gap-2.5 animate-in fade-in duration-200">
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0, y: -4 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.9, opacity: 0, y: -4 }}
+          transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+          className="bg-white border-[2.5px] border-black shadow-[4px_4px_0px_#000] p-2 rounded-2xl flex flex-wrap items-center justify-center gap-2.5"
+        >
           <div className="flex items-center gap-1.5 text-xs font-mono">
             <span className="bg-[#FFE169] border border-black px-2 py-0.5 rounded-md font-extrabold text-black">
-              {numRegions > 1 ? `${numRegions} Areas • ` : ''}
+              {selection.connectedAreaCount && selection.connectedAreaCount > 1
+                ? `${selection.connectedAreaCount} Areas • `
+                : numRegions > 1
+                ? `${numRegions} Areas • `
+                : ''}
               {selection.pixelCount.toLocaleString()} px
             </span>
             <span className="font-extrabold text-black font-sans">
@@ -196,7 +253,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <button
             id="btn-buy-selection"
             onClick={onOpenBuyModal}
-            className="bg-[#FF6B6B] hover:bg-red-400 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[3px_3px_0px_#000] px-3.5 py-1 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform"
+            className="bg-[#FF6B6B] hover:bg-red-400 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[3px_3px_0px_#000] px-3.5 py-1 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform cursor-pointer"
           >
             <ShoppingCart className="w-3.5 h-3.5" />
             <span>Buy Pixels (${selection.cost.toFixed(2)})</span>
@@ -205,11 +262,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <button
             onClick={onClearSelection}
             title="Clear Selection"
-            className="text-gray-500 hover:text-black hover:bg-gray-100 p-1 rounded-lg transition-colors"
+            className="text-gray-500 hover:text-black hover:bg-gray-100 p-1 rounded-lg transition-colors cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>
-        </div>
+        </motion.div>
       )}
     </aside>
   );

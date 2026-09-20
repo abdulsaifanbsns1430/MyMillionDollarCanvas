@@ -6,6 +6,7 @@ import {
   evaluateSelection,
   applyDragSelection,
   rectsOverlap,
+  computeSelectionBoundarySegments,
   PRICE_PER_PIXEL,
   hexToRgb,
 } from '../lib/canvasUtils';
@@ -45,6 +46,8 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   // Interaction tracking state
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const mouseDownPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const hasMovedSignificantlyRef = useRef<boolean>(false);
   const mouseWorldPosRef = useRef<{ x: number; y: number }>({ x: 500, y: 500 });
   const isSpacePressedRef = useRef(false);
   const isAltPressedRef = useRef(false);
@@ -306,7 +309,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       }
     }
 
-    // Render all active selection regions (Multi-region support!)
+    // Render all active selection regions (Multi-region & merged shapes support!)
     if (selection) {
       const regionsToRender =
         selection.regions && selection.regions.length > 0
@@ -323,29 +326,37 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
               },
             ];
 
+      // 1. Fill all selection rects seamlessly with translucent teal
+      overlayCtx.fillStyle = 'rgba(78, 205, 196, 0.38)';
       regionsToRender.forEach((region) => {
         const p1 = worldToScreen(region.x, region.y);
         const pw = region.width * viewport.zoom;
         const ph = region.height * viewport.zoom;
-
-        // Translucent teal neo-brutalist fill
-        overlayCtx.fillStyle = 'rgba(78, 205, 196, 0.38)';
         overlayCtx.fillRect(p1.x, p1.y, pw, ph);
-
-        // Dashed black border
-        overlayCtx.strokeStyle = '#000000';
-        overlayCtx.lineWidth = 2.5;
-        overlayCtx.setLineDash([6, 4]);
-        overlayCtx.strokeRect(p1.x, p1.y, pw, ph);
-        overlayCtx.setLineDash([]);
       });
+
+      // 2. Draw unified perimeter boundary outline (ZERO internal borders between touching rectangles!)
+      const boundarySegments = computeSelectionBoundarySegments(regionsToRender);
+      overlayCtx.strokeStyle = '#000000';
+      overlayCtx.lineWidth = 2.5;
+      overlayCtx.setLineDash([6, 4]);
+      overlayCtx.beginPath();
+      boundarySegments.forEach((seg) => {
+        const sp1 = worldToScreen(seg.x1, seg.y1);
+        const sp2 = worldToScreen(seg.x2, seg.y2);
+        overlayCtx.moveTo(sp1.x, sp1.y);
+        overlayCtx.lineTo(sp2.x, sp2.y);
+      });
+      overlayCtx.stroke();
+      overlayCtx.setLineDash([]);
 
       // Neo-brutalist Floating Info Tag near top-left of primary selection
       const p1 = worldToScreen(selection.x, selection.y);
+      const areaCount = selection.connectedAreaCount ?? (regionsToRender.length > 1 ? regionsToRender.length : 1);
       const tagText =
-        regionsToRender.length > 1
-          ? `${regionsToRender.length} Areas • ${selection.pixelCount} px • $${selection.cost.toFixed(2)}`
-          : `${selection.width}×${selection.height} = ${selection.pixelCount} px ($${selection.cost.toFixed(2)})`;
+        areaCount > 1
+          ? `${areaCount} Areas • ${selection.pixelCount} px • $${selection.cost.toFixed(2)}`
+          : `${selection.pixelCount} px • $${selection.cost.toFixed(2)}`;
 
       overlayCtx.font = 'bold 12px monospace';
       const textMetrics = overlayCtx.measureText(tagText);
@@ -388,13 +399,13 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
           activeDragBox.startY < r.y + r.height
       );
       const overlapsExisting = existingRegs.some((r) => rectsOverlap(r, dragWorldRect));
-      const isUnselect = isAltPressedRef.current || selectionActionRef.current === 'remove' || dragStartedInside;
+      const isUnselect = isAltPressedRef.current || selectionActionRef.current === 'remove';
 
       const p1 = worldToScreen(minX, minY);
       const pw = dw * viewport.zoom;
       const ph = dh * viewport.zoom;
 
-      if (isUnselect || (overlapsExisting && !dragStartedInside)) {
+      if (isUnselect) {
         // Red / Coral preview indicating unselect/erase
         overlayCtx.fillStyle = 'rgba(255, 107, 107, 0.4)';
         overlayCtx.fillRect(p1.x, p1.y, pw, ph);
@@ -418,9 +429,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
       // Drag badge label
       const dragTagText = isUnselect
-        ? `Unselect (${dw}×${dh} px)`
-        : overlapsExisting
-        ? `Unselect Overlap (${dw}×${dh} px)`
+        ? `Erase (${dw}×${dh} px)`
         : `+ Area • ${dw}×${dh} = ${dw * dh} px`;
 
       overlayCtx.font = 'bold 11px monospace';
@@ -430,7 +439,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       const dTagX = Math.min(width - dTagW - 10, Math.max(10, p1.x));
       const dTagY = Math.max(10, p1.y - dTagH - 4);
 
-      overlayCtx.fillStyle = isUnselect || (overlapsExisting && !dragStartedInside) ? '#FF7675' : '#FFE169';
+      overlayCtx.fillStyle = isUnselect ? '#FF7675' : '#FFE169';
       overlayCtx.fillRect(dTagX, dTagY, dTagW, dTagH);
 
       overlayCtx.strokeStyle = '#000000';
@@ -582,60 +591,102 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       }
     };
 
-    const handleNativeTouchEnd = () => {
+    // Commit and finalize selection drag
+    const commitSelectionDrag = (endClientX?: number, endClientY?: number, isAlt?: boolean) => {
+      if (!isSelectingRef.current) return;
+      isSelectingRef.current = false;
       isDraggingRef.current = false;
+
+      const curBox = activeDragBoxRef.current;
+      setActiveDragBox(null);
+
+      const startW = curBox ? { x: curBox.startX, y: curBox.startY } : selectStartWorldRef.current;
+      let endW = curBox ? { x: curBox.currentX, y: curBox.currentY } : selectStartWorldRef.current;
+
+      if (endClientX !== undefined && endClientY !== undefined && container) {
+        const rect = container.getBoundingClientRect();
+        const vp = viewportRef.current;
+        const sx = endClientX - rect.left;
+        const sy = endClientY - rect.top;
+        endW = {
+          x: (sx - vp.x) / vp.zoom,
+          y: (sy - vp.y) / vp.zoom,
+        };
+      }
+
+      const worldDist = Math.hypot(endW.x - startW.x, endW.y - startW.y);
+      const forceAction =
+        isAlt || isAltPressedRef.current || selectionActionRef.current === 'remove' ? 'remove' : undefined;
+
+      if (worldDist >= 1.0 || hasMovedSignificantlyRef.current) {
+        const newSel = applyDragSelection(
+          startW.x,
+          startW.y,
+          endW.x,
+          endW.y,
+          plotsRef.current,
+          selectionRef.current?.regions || [],
+          forceAction
+        );
+        onSelectionChange(newSel);
+      } else {
+        // Stationary single click in select mode
+        const clickedPlot = plotsRef.current.find(
+          (p) =>
+            endW.x >= p.x &&
+            endW.x < p.x + p.width &&
+            endW.y >= p.y &&
+            endW.y < p.y + p.height
+        );
+
+        if (clickedPlot) {
+          onSelectPlot(clickedPlot);
+        } else {
+          const newSel = applyDragSelection(
+            endW.x,
+            endW.y,
+            endW.x,
+            endW.y,
+            plotsRef.current,
+            selectionRef.current?.regions || [],
+            forceAction
+          );
+          onSelectionChange(newSel);
+        }
+      }
+    };
+
+    const handleNativeTouchEnd = () => {
       touchStartDistRef.current = null;
       touchStartCenterRef.current = null;
 
       if (modeRef.current === 'select' && isSelectingRef.current) {
-        isSelectingRef.current = false;
-        const curBox = activeDragBoxRef.current;
-        setActiveDragBox(null);
-
-        if (curBox) {
-          const startW = { x: curBox.startX, y: curBox.startY };
-          const endW = { x: curBox.currentX, y: curBox.currentY };
-          const worldDist = Math.hypot(endW.x - startW.x, endW.y - startW.y);
-          const forceAction =
-            isAltPressedRef.current || selectionActionRef.current === 'remove' ? 'remove' : undefined;
-
-          if (worldDist >= 1.5) {
-            const newSel = applyDragSelection(
-              startW.x,
-              startW.y,
-              endW.x,
-              endW.y,
-              plotsRef.current,
-              selectionRef.current?.regions || [],
-              forceAction
-            );
-            onSelectionChange(newSel);
-          } else {
-            const clickedPlot = plotsRef.current.find(
-              (p) =>
-                startW.x >= p.x &&
-                startW.x < p.x + p.width &&
-                startW.y >= p.y &&
-                startW.y < p.y + p.height
-            );
-            if (clickedPlot) {
-              onSelectPlot(clickedPlot);
-            } else {
-              const newSel = applyDragSelection(
-                startW.x,
-                startW.y,
-                startW.x,
-                startW.y,
-                plotsRef.current,
-                selectionRef.current?.regions || [],
-                forceAction
-              );
-              onSelectionChange(newSel);
-            }
-          }
-        }
+        commitSelectionDrag();
+      } else {
+        isDraggingRef.current = false;
       }
     };
+
+    // Global pointer/mouse up listeners so dragging/panning is NEVER stuck even if cursor leaves window or goes over toolbar
+    const handleGlobalPointerUp = (e: Event) => {
+      const mouseEvt = e as MouseEvent;
+      if (isSelectingRef.current) {
+        commitSelectionDrag(mouseEvt.clientX, mouseEvt.clientY, mouseEvt.altKey);
+      } else if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+      }
+    };
+
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
+    window.addEventListener('mouseup', handleGlobalPointerUp);
+    window.addEventListener('blur', handleWindowBlur);
 
     container.addEventListener('wheel', handleNativeWheel, { passive: false });
     container.addEventListener('touchstart', handleNativeTouchStart, { passive: false });
@@ -643,6 +694,10 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     container.addEventListener('touchend', handleNativeTouchEnd, { passive: false });
 
     return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
+      window.removeEventListener('mouseup', handleGlobalPointerUp);
+      window.removeEventListener('blur', handleWindowBlur);
       container.removeEventListener('wheel', handleNativeWheel);
       container.removeEventListener('touchstart', handleNativeTouchStart);
       container.removeEventListener('touchmove', handleNativeTouchMove);
@@ -661,6 +716,8 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
     isDraggingRef.current = true;
     dragStartRef.current = { x: screenX, y: screenY };
+    mouseDownPosRef.current = { x: screenX, y: screenY };
+    hasMovedSignificantlyRef.current = false;
 
     if (e.button === 1 || isSpacePressedRef.current || mode === 'pan') {
       return;
@@ -689,6 +746,14 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
     if (!isDraggingRef.current) return;
 
+    const totalDistMoved = Math.hypot(
+      screenX - mouseDownPosRef.current.x,
+      screenY - mouseDownPosRef.current.y
+    );
+    if (totalDistMoved >= 4) {
+      hasMovedSignificantlyRef.current = true;
+    }
+
     const dx = screenX - dragStartRef.current.x;
     const dy = screenY - dragStartRef.current.y;
 
@@ -716,15 +781,11 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
     const worldPos = screenToWorld(screenX, screenY);
-    const totalDragDist = Math.hypot(
-      screenX - dragStartRef.current.x,
-      screenY - dragStartRef.current.y
-    );
-
-    isDraggingRef.current = false;
+    const moved = hasMovedSignificantlyRef.current;
 
     if (mode === 'select' && isSelectingRef.current) {
       isSelectingRef.current = false;
+      isDraggingRef.current = false;
       const curBox = activeDragBoxRef.current;
       setActiveDragBox(null);
 
@@ -734,7 +795,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       const forceAction =
         e.altKey || isAltPressedRef.current || selectionAction === 'remove' ? 'remove' : undefined;
 
-      if (worldDist >= 1.5) {
+      if (worldDist >= 1.0 || moved) {
         const newSel = applyDragSelection(
           startW.x,
           startW.y,
@@ -746,7 +807,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         );
         onSelectionChange(newSel);
       } else {
-        // Single click
+        // Stationary single click in select mode
         const clickedPlot = plots.find(
           (p) =>
             worldPos.x >= p.x &&
@@ -758,7 +819,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         if (clickedPlot) {
           onSelectPlot(clickedPlot);
         } else {
-          // Toggle 1x1 pixel
+          // Add 1x1 pixel
           const newSel = applyDragSelection(
             worldPos.x,
             worldPos.y,
@@ -771,18 +832,21 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
           onSelectionChange(newSel);
         }
       }
-    } else if (totalDragDist < 5) {
-      const worldPos = screenToWorld(screenX, screenY);
-      const clickedPlot = plots.find(
-        (p) =>
-          worldPos.x >= p.x &&
-          worldPos.x < p.x + p.width &&
-          worldPos.y >= p.y &&
-          worldPos.y < p.y + p.height
-      );
+    } else if (mode === 'pan' || !isSelectingRef.current) {
+      isDraggingRef.current = false;
+      // ONLY trigger onSelectPlot if the user did NOT drag the screen! (Pure stationary click)
+      if (!moved) {
+        const clickedPlot = plots.find(
+          (p) =>
+            worldPos.x >= p.x &&
+            worldPos.x < p.x + p.width &&
+            worldPos.y >= p.y &&
+            worldPos.y < p.y + p.height
+        );
 
-      if (clickedPlot) {
-        onSelectPlot(clickedPlot);
+        if (clickedPlot) {
+          onSelectPlot(clickedPlot);
+        }
       }
     }
   };

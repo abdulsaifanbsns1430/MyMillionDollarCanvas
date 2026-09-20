@@ -32,12 +32,16 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
       try {
         const remote = await getTopLeaderboard();
 
-        // Calculate plot coordinates mapping from active plots in memory
+        // Calculate plot center coordinates mapping from active plots in memory
         const plotMap = new Map<string, { x: number; y: number; maxPixels: number }>();
         plots.forEach((p) => {
           const current = plotMap.get(p.ownerUsername);
           if (!current || p.pixelCount > current.maxPixels) {
-            plotMap.set(p.ownerUsername, { x: p.x, y: p.y, maxPixels: p.pixelCount });
+            plotMap.set(p.ownerUsername, {
+              x: p.x + p.width / 2,
+              y: p.y + p.height / 2,
+              maxPixels: p.pixelCount,
+            });
           }
         });
 
@@ -59,7 +63,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                 photoURL: p.ownerPhotoURL,
                 totalPixelsBought: p.pixelCount,
                 totalSpent: p.pricePaid,
-                largestPlotCoords: { x: p.x, y: p.y },
+                largestPlotCoords: { x: p.x + p.width / 2, y: p.y + p.height / 2 },
               });
             }
           });
