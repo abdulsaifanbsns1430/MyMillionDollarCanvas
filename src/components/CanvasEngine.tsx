@@ -43,6 +43,7 @@ interface CanvasEngineProps {
   onPaintPixel: (x: number, y: number, color: string) => void;
   onFillSelection: (color: string) => void;
   hoveredPlotId: string | null;
+  onHoverPlot?: (id: string | null) => void;
 }
 
 export const CanvasEngine: React.FC<CanvasEngineProps> = ({
@@ -62,6 +63,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   onPaintPixel,
   onFillSelection,
   hoveredPlotId,
+  onHoverPlot,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -888,12 +890,12 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         // Handle single tap actions by step & tool
         if (currentStep === 'idle' || currentStep === 'inspect') {
           // Check if tapped an owned plot
-          const clickedPlot = plotsRef.current.find(
+          const clickedPlot = plotsRef.current.slice().reverse().find(
             (p) =>
-              worldPos.x >= p.x &&
-              worldPos.x < p.x + p.width &&
-              worldPos.y >= p.y &&
-              worldPos.y < p.y + p.height
+              px >= p.x &&
+              px < p.x + p.width &&
+              py >= p.y &&
+              py < p.y + p.height
           );
 
           if (clickedPlot) {
@@ -901,7 +903,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
             return;
           }
 
-          // Unowned pixel tap -> Inspect mode
+          // Unowned pixel tap -> Inspect mode & selection
           if (px >= 0 && px < CANVAS_WIDTH && py >= 0 && py < CANVAS_HEIGHT) {
             onInspectPixel(px, py);
           }
@@ -1062,7 +1064,17 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     const worldPos = screenToWorld(screenX, screenY);
     mouseWorldPosRef.current = worldPos;
 
-    if (!isMouseDownRef.current) return;
+    if (!isMouseDownRef.current) {
+      if (step === 'idle') {
+        const px = Math.floor(worldPos.x);
+        const py = Math.floor(worldPos.y);
+        const hPlot = plots.slice().reverse().find(
+          (p) => px >= p.x && px < p.x + p.width && py >= p.y && py < p.y + p.height
+        );
+        onHoverPlot?.(hPlot ? hPlot.id : null);
+      }
+      return;
+    }
 
     const distMoved = Math.hypot(
       screenX - mouseDownPosRef.current.x,
@@ -1121,13 +1133,13 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       const clickedPx = Math.floor(worldPos.x);
       const clickedPy = Math.floor(worldPos.y);
 
-      // Check if clicked an existing owned plot
-      const clickedPlot = plots.find(
+      // Check if clicked an existing owned plot (reverse order for accurate hit-testing)
+      const clickedPlot = plots.slice().reverse().find(
         (p) =>
-          worldPos.x >= p.x &&
-          worldPos.x < p.x + p.width &&
-          worldPos.y >= p.y &&
-          worldPos.y < p.y + p.height
+          clickedPx >= p.x &&
+          clickedPx < p.x + p.width &&
+          clickedPy >= p.y &&
+          clickedPy < p.y + p.height
       );
 
       if (clickedPlot) {
@@ -1143,7 +1155,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         clickedPy < CANVAS_HEIGHT
       ) {
         if (step === 'idle' || step === 'inspect') {
-          // Open inspect container at bottom!
+          // Open inspect container at bottom and highlight selected pixel!
           onInspectPixel(clickedPx, clickedPy);
         } else if (step === 'select') {
           // Single click pixel toggle in select mode
@@ -1201,19 +1213,13 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     });
   };
 
-  // Cursor style calculation
+  // Normal cursor style (no hand-like grab cursor)
   const getCursorStyle = () => {
-    if (isSpacePressedRef.current || isDraggingCanvasRef.current) {
-      return 'cursor-grab active:cursor-grabbing';
-    }
-    if (step === 'idle' || step === 'inspect') {
-      return 'cursor-grab active:cursor-grabbing';
-    }
     if (step === 'select') {
-      return selectTool === 'pan' ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair';
+      return selectTool === 'pan' ? 'cursor-default' : 'cursor-crosshair';
     }
     if (step === 'paint') {
-      if (paintTool === 'pan') return 'cursor-grab active:cursor-grabbing';
+      if (paintTool === 'pan') return 'cursor-default';
       if (paintTool === 'eyedropper') return 'cursor-copy';
       return 'cursor-crosshair';
     }

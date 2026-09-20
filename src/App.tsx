@@ -122,6 +122,7 @@ export default function App() {
 
   // Auth State Listener
   useEffect(() => {
+    // Immediate hydration from localStorage if available
     try {
       const storedUser = localStorage.getItem('million_canvas_active_user');
       if (storedUser) {
@@ -130,6 +131,7 @@ export default function App() {
         getUserProfile(parsed.uid, parsed.email || undefined).then((p) => {
           if (p && p.username) {
             setUserProfile(p);
+            setShowOnboarding(false);
           }
         });
       }
@@ -137,23 +139,6 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
-        if (fbUser.email) {
-          try {
-            const status = await getGoogleAccountStatus(fbUser.email);
-            if (status.hasPassword) {
-              const sessionVerified = sessionStorage.getItem('google_pass_verified_' + fbUser.uid);
-              if (!sessionVerified) {
-                setRawUser(null);
-                setUserProfile(null);
-                setIsAuthModalOpen(true);
-                return;
-              }
-            }
-          } catch (e) {
-            console.warn('Notice checking google status:', e);
-          }
-        }
-
         setRawUser(fbUser);
         try {
           const profile = await getUserProfile(fbUser.uid, fbUser.email || undefined);
@@ -161,12 +146,7 @@ export default function App() {
             setUserProfile(profile);
             setShowOnboarding(false);
           } else {
-            const status = fbUser.email ? await getGoogleAccountStatus(fbUser.email) : { hasPassword: false };
-            if (!status.hasPassword) {
-              setShowOnboarding(true);
-            } else {
-              setShowOnboarding(false);
-            }
+            setShowOnboarding(true);
           }
         } catch (err) {
           console.warn('Profile fetch error:', err);
@@ -182,9 +162,6 @@ export default function App() {
               setUserProfile(profile);
               setShowOnboarding(false);
               return;
-            } else {
-              localStorage.removeItem('million_canvas_active_user');
-              localStorage.removeItem('million_canvas_active_profile');
             }
           }
         } catch {}
@@ -237,6 +214,8 @@ export default function App() {
   // Workflow Handlers
   const handleInspectPixel = (x: number, y: number) => {
     setInspectCoord({ x, y });
+    const initSel = applyDragSelection(x, y, x, y, plots, [], 'add');
+    setSelection(initSel);
     setStep('inspect');
   };
 
@@ -445,6 +424,7 @@ export default function App() {
           onPaintPixel={handlePaintPixel}
           onFillSelection={handleFillSelection}
           hoveredPlotId={hoveredPlotId}
+          onHoverPlot={setHoveredPlotId}
         />
 
         {/* Animated Bottom Studio Bar (Inspect, Selection, and Paint workflows) */}
