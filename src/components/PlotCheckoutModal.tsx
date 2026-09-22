@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plot, UserProfile, PixelSelection } from '../types';
-import { PRICE_PER_PIXEL, hexToRgb } from '../lib/canvasUtils';
+import { PRICE_PER_PIXEL, hexToRgb, getSelectionPixelSet } from '../lib/canvasUtils';
 import {
   X,
   CreditCard,
@@ -119,40 +119,59 @@ export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
           : `https://${linkUrl.trim()}`
         : undefined;
 
-      // Create individual plot for each selected region so non-selected areas in-between remain completely unowned & empty
-      const createdPlots: Plot[] = regions.map((r, idx) => {
-        const regionPixels: string[] = new Array(r.width * r.height);
-        for (let py = r.y; py < r.y + r.height; py++) {
-          for (let px = r.x; px < r.x + r.width; px++) {
-            const key = `${px},${py}`;
-            const color = draftPixels.get(key) || '#FFE169';
-            const localIdx = (py - r.y) * r.width + (px - r.x);
-            regionPixels[localIdx] = color;
-          }
-        }
+      // Compute overall bounding box of the entire selection
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
 
-        return {
-          id: `plot_${r.x}_${r.y}_${Date.now()}_${idx}`,
-          ownerId: user.uid,
-          ownerUsername: user.username,
-          ownerProfileId: user.profileId,
-          ownerPhotoURL: user.photoURL,
-          x: r.x,
-          y: r.y,
-          width: r.width,
-          height: r.height,
-          pixelCount: r.pixelCount,
-          pricePaid: r.cost,
-          title: regions.length > 1 ? `${title.trim()} (${idx + 1}/${regions.length})` : title.trim(),
-          note: note.trim() || 'Claimed on Million Dollar Canvas',
-          linkUrl: cleanLink,
-          pixels: regionPixels,
-          createdAt: Date.now() + idx,
-          updatedAt: Date.now() + idx,
-        };
+      regions.forEach((r) => {
+        minX = Math.min(minX, r.x);
+        minY = Math.min(minY, r.y);
+        maxX = Math.max(maxX, r.x + r.width);
+        maxY = Math.max(maxY, r.y + r.height);
       });
 
-      await onSuccess(createdPlots);
+      const plotW = Math.max(1, maxX - minX);
+      const plotH = Math.max(1, maxY - minY);
+
+      // Create a single pixel buffer for the merged bounding box
+      const plotPixels: string[] = new Array(plotW * plotH).fill('');
+      const selPixelSet = getSelectionPixelSet(selection);
+
+      for (let py = minY; py < maxY; py++) {
+        for (let px = minX; px < maxX; px++) {
+          const key = `${px},${py}`;
+          const localIdx = (py - minY) * plotW + (px - minX);
+          if (selPixelSet.has(key)) {
+            plotPixels[localIdx] = draftPixels.get(key) || '#FFE169';
+          } else {
+            plotPixels[localIdx] = ''; // Non-selected gap remains transparent/unowned
+          }
+        }
+      }
+
+      const singlePlot: Plot = {
+        id: `plot_${minX}_${minY}_${Date.now()}`,
+        ownerId: user.uid,
+        ownerUsername: user.username,
+        ownerProfileId: user.profileId,
+        ownerPhotoURL: user.photoURL,
+        x: minX,
+        y: minY,
+        width: plotW,
+        height: plotH,
+        pixelCount: totalPixels,
+        pricePaid: totalAmount,
+        title: title.trim(),
+        note: note.trim() || 'Claimed on Million Dollar Canvas',
+        linkUrl: cleanLink,
+        pixels: plotPixels,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await onSuccess([singlePlot]);
     } catch (err: any) {
       console.error('Payment / Plot Claim error:', err);
       setErrorMsg(err.message || 'Payment failed. Please try again.');

@@ -75,7 +75,9 @@ export const PlotNoteModal: React.FC<PlotNoteModalProps> = ({
             Coords: ({plot.x}, {plot.y})
           </span>
           <span className="bg-[#4ECDC4] border-[2px] border-black shadow-[2px_2px_0px_#000] px-2.5 py-1 rounded-xl font-bold text-black">
-            {plot.width} × {plot.height} ({plot.pixelCount} px)
+            {plot.pixelCount === plot.width * plot.height
+              ? `${plot.width} × ${plot.height} (${plot.pixelCount} px)`
+              : `${plot.pixelCount} px (${plot.width} × ${plot.height})`}
           </span>
           <span className="bg-[#A388EE] border-[2px] border-black shadow-[2px_2px_0px_#000] px-2.5 py-1 rounded-xl font-bold text-black">
             ${plot.pricePaid.toFixed(2)} USD

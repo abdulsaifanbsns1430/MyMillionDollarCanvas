@@ -217,6 +217,16 @@ export default function App() {
     const initSel = applyDragSelection(x, y, x, y, plots, [], 'add');
     setSelection(initSel);
     setStep('inspect');
+
+    // Smoothly zoom in into the clicked pixel and center it in the viewport
+    const targetZoom = 27.2; // ~2720% close-up zoom matching pixel detail view
+    const w = containerDimensions.width || window.innerWidth;
+    const h = containerDimensions.height || window.innerHeight;
+    setViewport({
+      x: w / 2 - (x + 0.5) * targetZoom,
+      y: h / 2 - (y + 0.5) * targetZoom,
+      zoom: targetZoom,
+    });
   };
 
   const handleStartSelecting = () => {

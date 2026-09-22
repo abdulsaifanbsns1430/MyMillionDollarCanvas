@@ -288,6 +288,62 @@ export function subtractRects(subjects: Rect[], clippers: Rect[]): Rect[] {
   return current;
 }
 
+// Check if a point/pixel is inside a plot's active pixels
+export function isPixelInsidePlot(plot: Plot, px: number, py: number): boolean {
+  if (px < plot.x || px >= plot.x + plot.width || py < plot.y || py >= plot.y + plot.height) {
+    return false;
+  }
+  if (plot.pixels && plot.pixels.length > 0) {
+    const localIdx = (py - plot.y) * plot.width + (px - plot.x);
+    const color = plot.pixels[localIdx];
+    return Boolean(color && color !== 'transparent');
+  }
+  return true;
+}
+
+// Decompose a plot into non-overlapping occupied rectangular strips
+export function getPlotOccupiedRects(plot: Plot): Rect[] {
+  if (!plot.pixels || plot.pixels.length === 0) {
+    return [{ x: plot.x, y: plot.y, width: plot.width, height: plot.height }];
+  }
+  const hasEmpty = plot.pixels.some((c) => !c || c === 'transparent');
+  if (!hasEmpty) {
+    return [{ x: plot.x, y: plot.y, width: plot.width, height: plot.height }];
+  }
+
+  const rects: Rect[] = [];
+  const w = plot.width;
+  const h = plot.height;
+
+  for (let py = 0; py < h; py++) {
+    let startX: number | null = null;
+    for (let px = 0; px < w; px++) {
+      const color = plot.pixels[py * w + px];
+      const isSolid = Boolean(color && color !== 'transparent');
+      if (isSolid && startX === null) {
+        startX = px;
+      } else if (!isSolid && startX !== null) {
+        rects.push({
+          x: plot.x + startX,
+          y: plot.y + py,
+          width: px - startX,
+          height: 1,
+        });
+        startX = null;
+      }
+    }
+    if (startX !== null) {
+      rects.push({
+        x: plot.x + startX,
+        y: plot.y + py,
+        width: w - startX,
+        height: 1,
+      });
+    }
+  }
+  return rects;
+}
+
 // Check if a selection collides with any plots and dynamically add or unselect regions
 export function applyDragSelection(
   startX: number,
@@ -307,28 +363,36 @@ export function applyDragSelection(
   const height = Math.max(1, maxY - minY + 1);
   const rawDragRect: Rect = { x: minX, y: minY, width, height };
 
-  // 1. Identify all colliding plots & subtract owned plots
+  // 1. Identify all colliding plots & extract exact occupied rectangles
   const collidingPlots: Plot[] = [];
   let totalOverlapPixels = 0;
+  const occupiedClippers: Rect[] = [];
 
   for (const plot of existingPlots) {
     if (rectsOverlap(rawDragRect, plot)) {
-      collidingPlots.push(plot);
-      const ox1 = Math.max(rawDragRect.x, plot.x);
-      const oy1 = Math.max(rawDragRect.y, plot.y);
-      const ox2 = Math.min(rawDragRect.x + rawDragRect.width, plot.x + plot.width);
-      const oy2 = Math.min(rawDragRect.y + rawDragRect.height, plot.y + plot.height);
-      if (ox2 > ox1 && oy2 > oy1) {
-        totalOverlapPixels += (ox2 - ox1) * (oy2 - oy1);
+      const plotRects = getPlotOccupiedRects(plot);
+      let plotCollided = false;
+      for (const pr of plotRects) {
+        if (rectsOverlap(rawDragRect, pr)) {
+          occupiedClippers.push(pr);
+          plotCollided = true;
+          const ox1 = Math.max(rawDragRect.x, pr.x);
+          const oy1 = Math.max(rawDragRect.y, pr.y);
+          const ox2 = Math.min(rawDragRect.x + rawDragRect.width, pr.x + pr.width);
+          const oy2 = Math.min(rawDragRect.y + rawDragRect.height, pr.y + pr.height);
+          if (ox2 > ox1 && oy2 > oy1) {
+            totalOverlapPixels += (ox2 - ox1) * (oy2 - oy1);
+          }
+        }
+      }
+      if (plotCollided) {
+        collidingPlots.push(plot);
       }
     }
   }
 
   // Free unowned pieces from this drag rectangle
-  const freePieces = subtractRects(
-    [rawDragRect],
-    collidingPlots.map((p) => ({ x: p.x, y: p.y, width: p.width, height: p.height }))
-  );
+  const freePieces = subtractRects([rawDragRect], occupiedClippers);
 
   // Check if drag started inside an already selected region
   const dragStartedInside = existingRegions.some(

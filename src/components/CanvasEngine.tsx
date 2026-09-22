@@ -16,6 +16,7 @@ import {
   rgbToHex,
   getSelectionPixelSet,
   getLinePixels,
+  isPixelInsidePlot,
 } from '../lib/canvasUtils';
 import {
   AlertCircle,
@@ -890,13 +891,10 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         // Handle single tap actions by step & tool
         if (currentStep === 'idle' || currentStep === 'inspect') {
           // Check if tapped an owned plot
-          const clickedPlot = plotsRef.current.slice().reverse().find(
-            (p) =>
-              px >= p.x &&
-              px < p.x + p.width &&
-              py >= p.y &&
-              py < p.y + p.height
-          );
+          const clickedPlot = plotsRef.current
+            .slice()
+            .reverse()
+            .find((p) => isPixelInsidePlot(p, px, py));
 
           if (clickedPlot) {
             onSelectPlot(clickedPlot);
@@ -1068,9 +1066,10 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       if (step === 'idle') {
         const px = Math.floor(worldPos.x);
         const py = Math.floor(worldPos.y);
-        const hPlot = plots.slice().reverse().find(
-          (p) => px >= p.x && px < p.x + p.width && py >= p.y && py < p.y + p.height
-        );
+        const hPlot = plots
+          .slice()
+          .reverse()
+          .find((p) => isPixelInsidePlot(p, px, py));
         onHoverPlot?.(hPlot ? hPlot.id : null);
       }
       return;
@@ -1134,13 +1133,10 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       const clickedPy = Math.floor(worldPos.y);
 
       // Check if clicked an existing owned plot (reverse order for accurate hit-testing)
-      const clickedPlot = plots.slice().reverse().find(
-        (p) =>
-          clickedPx >= p.x &&
-          clickedPx < p.x + p.width &&
-          clickedPy >= p.y &&
-          clickedPy < p.y + p.height
-      );
+      const clickedPlot = plots
+        .slice()
+        .reverse()
+        .find((p) => isPixelInsidePlot(p, clickedPx, clickedPy));
 
       if (clickedPlot) {
         onSelectPlot(clickedPlot);
