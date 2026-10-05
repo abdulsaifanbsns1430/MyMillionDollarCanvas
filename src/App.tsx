@@ -7,12 +7,12 @@ import { AuthModal } from './components/AuthModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { PlotCheckoutModal } from './components/PlotCheckoutModal';
 import { PlotNoteModal } from './components/PlotNoteModal';
-import { PaintStudioModal } from './components/PaintStudioModal';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { SearchModal } from './components/SearchModal';
 import { HowItWorksModal } from './components/HowItWorksModal';
 import { MonetizationGuideModal } from './components/MonetizationGuideModal';
 import { MyPlotsModal } from './components/MyPlotsModal';
+import { FrameBoardStudio } from './components/FrameBoardStudio';
 import {
   UserProfile,
   Plot,
@@ -28,7 +28,6 @@ import {
   getUserProfile,
   subscribePlots,
   savePlot,
-  updatePlotArtworkAndNote,
   getGoogleAccountStatus,
   AppUser,
 } from './lib/firebase';
@@ -38,6 +37,7 @@ import {
   CANVAS_HEIGHT,
   applyDragSelection,
   mapImageToDraftPixels,
+  processImageForPlotFrame,
   getSelectionPixelSet,
 } from './lib/canvasUtils';
 
@@ -55,6 +55,7 @@ export default function App() {
   const [paintTool, setPaintTool] = useState<PaintTool>('brush');
   const [currentColor, setCurrentColor] = useState<string>('#FF6B6B');
   const [draftPixels, setDraftPixels] = useState<Map<string, string>>(new Map());
+  const [draftImageUrl, setDraftImageUrl] = useState<string | null>(null);
 
   // Canvas & Plot state
   const [plots, setPlots] = useState<Plot[]>([]);
@@ -76,7 +77,6 @@ export default function App() {
 
   // Modal dialog states
   const [activePlotForNote, setActivePlotForNote] = useState<Plot | null>(null);
-  const [activePlotForPaint, setActivePlotForPaint] = useState<Plot | null>(null);
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -250,6 +250,7 @@ export default function App() {
   const handleClearSelection = () => {
     setSelection(null);
     setDraftPixels(new Map());
+    setDraftImageUrl(null);
   };
 
   const handleCancelWorkflow = () => {
@@ -257,6 +258,7 @@ export default function App() {
     setInspectCoord(null);
     setSelection(null);
     setDraftPixels(new Map());
+    setDraftImageUrl(null);
     setIsCheckoutModalOpen(false);
   };
 
@@ -315,12 +317,13 @@ export default function App() {
     });
   };
 
-  // Upload image and span across entire selection
+  // Upload image and span across entire selection at original quality
   const handleUploadImage = async (file: File) => {
     if (!selection || selection.pixelCount === 0) return;
     try {
-      const mapped = await mapImageToDraftPixels(file, selection);
-      setDraftPixels(mapped);
+      const processed = await processImageForPlotFrame(file, selection);
+      setDraftImageUrl(processed.imageUrl);
+      setDraftPixels(processed.draftPixels);
     } catch (err) {
       console.error('Image mapping error:', err);
     }
@@ -352,6 +355,7 @@ export default function App() {
       setIsCheckoutModalOpen(false);
       setSelection(null);
       setDraftPixels(new Map());
+      setDraftImageUrl(null);
       setInspectCoord(null);
       setStep('idle');
     } catch (err) {
@@ -360,39 +364,10 @@ export default function App() {
       setIsCheckoutModalOpen(false);
       setSelection(null);
       setDraftPixels(new Map());
+      setDraftImageUrl(null);
       setInspectCoord(null);
       setStep('idle');
     }
-  };
-
-  // Plot Save (Artwork & Note) from PaintStudioModal for existing owned plots
-  const handleSavePlotArtwork = async (
-    plotId: string,
-    updatedPixels: string[],
-    newTitle: string,
-    newNote: string,
-    newLinkUrl?: string
-  ) => {
-    try {
-      await updatePlotArtworkAndNote(plotId, updatedPixels, newTitle, newNote, newLinkUrl);
-    } catch (err) {
-      console.warn('Remote plot update error, saving locally:', err);
-    }
-
-    setPlots((prev) =>
-      prev.map((p) =>
-        p.id === plotId
-          ? {
-              ...p,
-              pixels: updatedPixels,
-              title: newTitle,
-              note: newNote,
-              linkUrl: newLinkUrl,
-              updatedAt: Date.now(),
-            }
-          : p
-      )
-    );
   };
 
   return (
@@ -431,31 +406,49 @@ export default function App() {
           onSelectionChange={setSelection}
           selection={selection}
           draftPixels={draftPixels}
+          draftImageUrl={draftImageUrl}
           onPaintPixel={handlePaintPixel}
           onFillSelection={handleFillSelection}
           hoveredPlotId={hoveredPlotId}
           onHoverPlot={setHoveredPlotId}
         />
 
-        {/* Animated Bottom Studio Bar (Inspect, Selection, and Paint workflows) */}
-        <BottomStudioBar
-          step={step}
-          inspectCoord={inspectCoord}
-          selectTool={selectTool}
-          onSelectToolChange={setSelectTool}
-          paintTool={paintTool}
-          onPaintToolChange={setPaintTool}
-          currentColor={currentColor}
-          onColorChange={setCurrentColor}
-          selection={selection}
-          onStartSelecting={handleStartSelecting}
-          onClearSelection={handleClearSelection}
-          onCancelWorkflow={handleCancelWorkflow}
-          onProceedToPaint={handleProceedToPaint}
-          onBackToSelect={handleBackToSelect}
-          onProceedToCheckout={handleProceedToCheckout}
-          onUploadImage={handleUploadImage}
-        />
+        {/* Animated Bottom Studio Bar (Inspect and Selection workflows) */}
+        {step !== 'paint' && (
+          <BottomStudioBar
+            step={step}
+            inspectCoord={inspectCoord}
+            selectTool={selectTool}
+            onSelectToolChange={setSelectTool}
+            paintTool={paintTool}
+            onPaintToolChange={setPaintTool}
+            currentColor={currentColor}
+            onColorChange={setCurrentColor}
+            selection={selection}
+            onStartSelecting={handleStartSelecting}
+            onClearSelection={handleClearSelection}
+            onCancelWorkflow={handleCancelWorkflow}
+            onProceedToPaint={handleProceedToPaint}
+            onBackToSelect={handleBackToSelect}
+            onProceedToCheckout={handleProceedToCheckout}
+            onUploadImage={handleUploadImage}
+          />
+        )}
+
+        {/* High-Resolution Frame Studio Drawing Board (Step 2: Paint / Artwork Design) */}
+        {step === 'paint' && selection && (
+          <FrameBoardStudio
+            selection={selection}
+            draftImageUrl={draftImageUrl}
+            onUpdateArtwork={(imgUrl, pxMap) => {
+              setDraftImageUrl(imgUrl);
+              setDraftPixels(pxMap);
+            }}
+            onClose={() => setStep('select')}
+            onBackToSelect={handleBackToSelect}
+            onProceedToCheckout={handleProceedToCheckout}
+          />
+        )}
 
         {/* Mini-Map Radar (Bottom-Right) */}
         <MiniMap
@@ -512,43 +505,30 @@ export default function App() {
           plot={activePlotForNote}
           currentUser={userProfile}
           onClose={() => setActivePlotForNote(null)}
-          onEditPlot={(plot) => {
-            setActivePlotForNote(null);
-            setActivePlotForPaint(plot);
-          }}
         />
       )}
 
-      {/* 3. Pixel Paint Studio (When an owner re-edits an existing owned plot) */}
-      {activePlotForPaint && (
-        <PaintStudioModal
-          plot={activePlotForPaint}
-          onClose={() => setActivePlotForPaint(null)}
-          onSave={handleSavePlotArtwork}
-        />
-      )}
-
-      {/* 4. Brand New Checkout & Claim Modal (Step 3) */}
+      {/* 3. Brand New Checkout & Claim Modal (Step 3) */}
       {isCheckoutModalOpen && selection && userProfile && (
         <PlotCheckoutModal
           selection={selection}
           draftPixels={draftPixels}
+          draftImageUrl={draftImageUrl}
           user={userProfile}
           onClose={() => setIsCheckoutModalOpen(false)}
           onSuccess={handlePurchaseSuccess}
         />
       )}
 
-      {/* 5. Top 50 Leaderboard */}
+      {/* 4. Top 50 Leaderboard */}
       {isLeaderboardOpen && (
         <LeaderboardModal
           plots={plots}
           onClose={() => setIsLeaderboardOpen(false)}
-          onJumpToProps={(x, y) => jumpToCoordinates(x, y, 6.0)}
         />
       )}
 
-      {/* 6. Search / Coordinates Teleporter */}
+      {/* 5. Search / Coordinates Teleporter */}
       {isSearchOpen && (
         <SearchModal
           plots={plots}
@@ -558,23 +538,22 @@ export default function App() {
         />
       )}
 
-      {/* 7. How It Works Guide */}
+      {/* 6. How It Works Guide */}
       {isHowItWorksOpen && (
         <HowItWorksModal onClose={() => setIsHowItWorksOpen(false)} />
       )}
 
-      {/* 8. International Monetization Guide */}
+      {/* 7. International Monetization Guide */}
       {isMonetizationOpen && (
         <MonetizationGuideModal onClose={() => setIsMonetizationOpen(false)} />
       )}
 
-      {/* 9. My Plots Portfolio */}
+      {/* 8. My Plots Portfolio */}
       {isMyPlotsOpen && userProfile && (
         <MyPlotsModal
           user={userProfile}
           plots={plots}
           onClose={() => setIsMyPlotsOpen(false)}
-          onEditPlot={(plot) => setActivePlotForPaint(plot)}
           onJumpTo={(x, y) => jumpToCoordinates(x, y, 5.0)}
         />
       )}

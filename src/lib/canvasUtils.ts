@@ -354,10 +354,15 @@ export function applyDragSelection(
   existingRegions: SelectionRegion[] = [],
   forceAction?: 'add' | 'remove'
 ): PixelSelection | null {
-  const minX = Math.max(0, Math.min(Math.round(startX), Math.round(endX)));
-  const maxX = Math.min(CANVAS_WIDTH - 1, Math.max(Math.round(startX), Math.round(endX)));
-  const minY = Math.max(0, Math.min(Math.round(startY), Math.round(endY)));
-  const maxY = Math.min(CANVAS_HEIGHT - 1, Math.max(Math.round(startY), Math.round(endY)));
+  const p1X = Math.floor(startX);
+  const p2X = Math.floor(endX);
+  const minX = Math.max(0, Math.min(p1X, p2X));
+  const maxX = Math.min(CANVAS_WIDTH - 1, Math.max(p1X, p2X));
+
+  const p1Y = Math.floor(startY);
+  const p2Y = Math.floor(endY);
+  const minY = Math.max(0, Math.min(p1Y, p2Y));
+  const maxY = Math.min(CANVAS_HEIGHT - 1, Math.max(p1Y, p2Y));
 
   const width = Math.max(1, maxX - minX + 1);
   const height = Math.max(1, maxY - minY + 1);
@@ -728,20 +733,36 @@ export function getSelectionPixelSet(selection: PixelSelection | null): Set<stri
   return set;
 }
 
-// Map an uploaded image file across the overall bounding box of selected pixels
-export function mapImageToDraftPixels(
+export interface ProcessedFrameArtwork {
+  imageUrl: string;
+  draftPixels: Map<string, string>;
+}
+
+// Process an uploaded image file into a high-resolution frame artwork + fallback pixel map
+export function processImageForPlotFrame(
   imageFile: File,
   selection: PixelSelection
-): Promise<Map<string, string>> {
+): Promise<ProcessedFrameArtwork> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (event) => {
       const img = new Image();
       img.onload = () => {
         const result = new Map<string, string>();
-        const regions = selection.regions && selection.regions.length > 0 ? selection.regions : [
-          { id: '1', x: selection.x, y: selection.y, width: selection.width, height: selection.height, pixelCount: selection.pixelCount, cost: selection.cost }
-        ];
+        const regions =
+          selection.regions && selection.regions.length > 0
+            ? selection.regions
+            : [
+                {
+                  id: '1',
+                  x: selection.x,
+                  y: selection.y,
+                  width: selection.width,
+                  height: selection.height,
+                  pixelCount: selection.pixelCount,
+                  cost: selection.cost,
+                },
+              ];
 
         let minX = Infinity;
         let minY = Infinity;
@@ -757,6 +778,24 @@ export function mapImageToDraftPixels(
         const bboxW = Math.max(1, maxX - minX);
         const bboxH = Math.max(1, maxY - minY);
 
+        // 1. High-Resolution Frame Canvas (e.g. 800px max dimension or aspect ratio)
+        const maxDim = 800;
+        let hiResW = bboxW >= bboxH ? maxDim : Math.max(128, Math.round((bboxW / bboxH) * maxDim));
+        let hiResH = bboxH >= bboxW ? maxDim : Math.max(128, Math.round((bboxH / bboxW) * maxDim));
+
+        const hiResCanvas = document.createElement('canvas');
+        hiResCanvas.width = hiResW;
+        hiResCanvas.height = hiResH;
+        const hiResCtx = hiResCanvas.getContext('2d');
+        if (hiResCtx) {
+          hiResCtx.imageSmoothingEnabled = true;
+          hiResCtx.imageSmoothingQuality = 'high';
+          hiResCtx.drawImage(img, 0, 0, hiResW, hiResH);
+        }
+
+        const highResDataUrl = hiResCanvas.toDataURL('image/png', 0.92);
+
+        // 2. Fallback pixel map for grid indexing
         const offscreen = document.createElement('canvas');
         offscreen.width = bboxW;
         offscreen.height = bboxH;
@@ -794,7 +833,10 @@ export function mapImageToDraftPixels(
           }
         });
 
-        resolve(result);
+        resolve({
+          imageUrl: highResDataUrl,
+          draftPixels: result,
+        });
       };
       img.onerror = () => reject(new Error('Failed to load image'));
       img.src = event.target?.result as string;
@@ -802,6 +844,15 @@ export function mapImageToDraftPixels(
     reader.onerror = () => reject(new Error('Failed to read file'));
     reader.readAsDataURL(imageFile);
   });
+}
+
+// Map an uploaded image file across the overall bounding box of selected pixels
+export async function mapImageToDraftPixels(
+  imageFile: File,
+  selection: PixelSelection
+): Promise<Map<string, string>> {
+  const processed = await processImageForPlotFrame(imageFile, selection);
+  return processed.draftPixels;
 }
 
 // Bresenham's line algorithm for continuous stroke painting

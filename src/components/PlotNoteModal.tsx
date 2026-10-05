@@ -2,7 +2,6 @@ import React from 'react';
 import {
   X,
   ExternalLink,
-  Paintbrush,
   Calendar,
   Share2,
   Check,
@@ -14,14 +13,12 @@ interface PlotNoteModalProps {
   plot: Plot;
   currentUser: UserProfile | null;
   onClose: () => void;
-  onEditPlot: (plot: Plot) => void;
 }
 
 export const PlotNoteModal: React.FC<PlotNoteModalProps> = ({
   plot,
   currentUser,
   onClose,
-  onEditPlot,
 }) => {
   const [copiedLink, setCopiedLink] = React.useState(false);
   const isOwner = currentUser && currentUser.uid === plot.ownerId;
@@ -83,6 +80,20 @@ export const PlotNoteModal: React.FC<PlotNoteModalProps> = ({
             ${plot.pricePaid.toFixed(2)} USD
           </span>
         </div>
+
+        {/* High-Resolution Artwork Frame Preview */}
+        {plot.imageUrl && (
+          <div className="bg-white border-[2px] border-black shadow-[3px_3px_0px_#000] rounded-xl p-2 mb-4 flex flex-col items-center justify-center bg-[#FAF8F5]">
+            <div className="text-[10px] font-mono uppercase font-black text-gray-500 mb-1 w-full text-left">
+              Frame Artwork (Original Quality)
+            </div>
+            <img
+              src={plot.imageUrl}
+              alt={plot.title || 'Plot Artwork'}
+              className="max-h-44 max-w-full object-contain rounded-lg border border-black shadow-[1px_1px_0px_#000]"
+            />
+          </div>
+        )}
 
         {/* Owner Card */}
         <div className="bg-white border-[2px] border-black shadow-[3px_3px_0px_#000] p-3 rounded-xl mb-4 flex items-center justify-between">
@@ -170,23 +181,12 @@ export const PlotNoteModal: React.FC<PlotNoteModalProps> = ({
             )}
           </button>
 
-          {isOwner ? (
-            <button
-              id="btn-edit-plot-artwork"
-              onClick={() => onEditPlot(plot)}
-              className="bg-[#4ECDC4] hover:bg-teal-300 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[3px_3px_0px_#000] px-4 py-2 rounded-xl text-xs font-black text-black flex items-center gap-1.5 transition-transform"
-            >
-              <Paintbrush className="w-3.5 h-3.5" />
-              <span>Edit Artwork & Note</span>
-            </button>
-          ) : (
-            <button
-              onClick={onClose}
-              className="bg-black hover:bg-gray-800 text-white border-[2px] border-black shadow-[2px_2px_0px_#000] px-4 py-2 rounded-xl text-xs font-bold"
-            >
-              Close Window
-            </button>
-          )}
+          <button
+            onClick={onClose}
+            className="bg-black hover:bg-gray-800 text-white border-[2px] border-black shadow-[2px_2px_0px_#000] px-4 py-2 rounded-xl text-xs font-bold"
+          >
+            Close Window
+          </button>
         </div>
       </div>
     </div>

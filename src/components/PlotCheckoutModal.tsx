@@ -17,6 +17,7 @@ import {
 interface PlotCheckoutModalProps {
   selection: PixelSelection;
   draftPixels: Map<string, string>;
+  draftImageUrl?: string | null;
   user: UserProfile;
   onClose: () => void;
   onSuccess: (newPlots: Plot[]) => Promise<void>;
@@ -25,6 +26,7 @@ interface PlotCheckoutModalProps {
 export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
   selection,
   draftPixels,
+  draftImageUrl,
   user,
   onClose,
   onSuccess,
@@ -70,24 +72,41 @@ export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
     const w = Math.max(1, maxX - minX);
     const h = Math.max(1, maxY - minY);
 
-    canvas.width = w;
-    canvas.height = h;
+    // Give the preview thumbnail crisp canvas dimensions
+    const previewScale = Math.max(1, Math.min(8, Math.floor(160 / Math.max(w, h))));
+    canvas.width = w * previewScale;
+    canvas.height = h * previewScale;
 
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#FAF8F5';
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    regions.forEach((r) => {
-      for (let py = r.y; py < r.y + r.height; py++) {
-        for (let px = r.x; px < r.x + r.width; px++) {
-          const key = `${px},${py}`;
-          const color = draftPixels.get(key) || '#FFE169';
-          ctx.fillStyle = color;
-          ctx.fillRect(px - minX, py - minY, 1, 1);
+    if (draftImageUrl) {
+      const img = new Image();
+      img.onload = () => {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = draftImageUrl;
+    } else {
+      regions.forEach((r) => {
+        for (let py = r.y; py < r.y + r.height; py++) {
+          for (let px = r.x; px < r.x + r.width; px++) {
+            const key = `${px},${py}`;
+            const color = draftPixels.get(key) || '#FFE169';
+            ctx.fillStyle = color;
+            ctx.fillRect(
+              (px - minX) * previewScale,
+              (py - minY) * previewScale,
+              previewScale,
+              previewScale
+            );
+          }
         }
-      }
-    });
-  }, [selection, draftPixels]);
+      });
+    }
+  }, [selection, draftPixels, draftImageUrl]);
 
   const handlePayAndSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,6 +186,7 @@ export const PlotCheckoutModal: React.FC<PlotCheckoutModalProps> = ({
         note: note.trim() || 'Claimed on Million Dollar Canvas',
         linkUrl: cleanLink,
         pixels: plotPixels,
+        imageUrl: draftImageUrl || undefined,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };

@@ -1,12 +1,11 @@
 import React from 'react';
-import { X, Sparkles, Paintbrush, MapPin, ExternalLink } from 'lucide-react';
+import { X, Sparkles, MapPin, ExternalLink } from 'lucide-react';
 import { Plot, UserProfile } from '../types';
 
 interface MyPlotsModalProps {
   user: UserProfile;
   plots: Plot[];
   onClose: () => void;
-  onEditPlot: (plot: Plot) => void;
   onJumpTo: (x: number, y: number) => void;
 }
 
@@ -14,14 +13,13 @@ export const MyPlotsModal: React.FC<MyPlotsModalProps> = ({
   user,
   plots,
   onClose,
-  onEditPlot,
   onJumpTo,
 }) => {
   const myPlots = plots.filter(
     (p) => (user?.uid && p.ownerId === user.uid) || (user?.username && p.ownerUsername === user.username)
   );
   const totalPixels = myPlots.reduce((acc, p) => acc + p.pixelCount, 0);
-  const totalValue = (totalPixels * 0.25).toLocaleString('en-US', {
+  const totalValue = (totalPixels * 0.50).toLocaleString('en-US', {
     style: 'currency',
     currency: 'USD',
   });
@@ -81,16 +79,29 @@ export const MyPlotsModal: React.FC<MyPlotsModalProps> = ({
                 key={plot.id}
                 className="bg-white border-[2px] border-black shadow-[2px_2px_0px_#000] p-3 rounded-xl flex items-center justify-between gap-2"
               >
-                <div>
-                  <div className="text-sm font-extrabold font-mono text-black">{plot.title}</div>
-                  <div className="text-[11px] font-mono text-gray-600">
-                    Coords: ({plot.x}, {plot.y}) • {plot.width}×{plot.height} ({plot.pixelCount} px) • ${plot.pricePaid.toFixed(2)}
-                  </div>
-                  {plot.note && (
-                    <div className="text-xs text-gray-700 italic mt-1 line-clamp-1">
-                      "{plot.note}"
+                <div className="flex items-center gap-3">
+                  {plot.imageUrl ? (
+                    <img
+                      src={plot.imageUrl}
+                      alt={plot.title}
+                      className="w-12 h-12 object-cover rounded-lg border border-black shadow-[1px_1px_0px_#000] shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 bg-[#FFE169] rounded-lg border border-black flex items-center justify-center font-bold text-xs font-mono shrink-0 shadow-[1px_1px_0px_#000]">
+                      {plot.pixelCount}px
                     </div>
                   )}
+                  <div>
+                    <div className="text-sm font-extrabold font-mono text-black">{plot.title}</div>
+                    <div className="text-[11px] font-mono text-gray-600">
+                      Coords: ({plot.x}, {plot.y}) • {plot.width}×{plot.height} ({plot.pixelCount} px) • ${plot.pricePaid.toFixed(2)}
+                    </div>
+                    {plot.note && (
+                      <div className="text-xs text-gray-700 italic mt-1 line-clamp-1">
+                        "{plot.note}"
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -102,19 +113,10 @@ export const MyPlotsModal: React.FC<MyPlotsModalProps> = ({
                       onClose();
                     }}
                     title="Jump on Canvas"
-                    className="bg-gray-100 hover:bg-yellow-100 border border-black p-1.5 rounded-lg text-xs font-bold"
+                    className="bg-gray-100 hover:bg-yellow-100 border border-black p-1.5 rounded-lg text-xs font-bold flex items-center gap-1"
                   >
                     <MapPin className="w-3.5 h-3.5 text-black" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      onEditPlot(plot);
-                      onClose();
-                    }}
-                    className="bg-[#FFE169] hover:bg-yellow-300 border border-black p-1.5 rounded-lg text-xs font-bold flex items-center gap-1"
-                  >
-                    <Paintbrush className="w-3.5 h-3.5 text-black" />
-                    <span className="hidden sm:inline">Paint</span>
+                    <span className="text-xs">Jump</span>
                   </button>
                 </div>
               </div>

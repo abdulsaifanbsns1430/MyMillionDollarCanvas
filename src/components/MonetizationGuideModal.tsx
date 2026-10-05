@@ -53,7 +53,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       price_data: {
         currency: 'usd',
         product_data: { name: 'Million Dollar Canvas Pixels' },
-        unit_amount: 25, // $0.25 in cents
+        unit_amount: 50, // $0.50 in cents
       },
       quantity: pixelCount,
     }],

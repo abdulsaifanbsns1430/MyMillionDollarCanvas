@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "Plot": {
+      "title": "Plot",
+      "description": "An owned rectangular or merged pixel plot/frame on the Million Dollar Canvas",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerUsername": { "type": "string" },
+        "ownerProfileId": { "type": "string" },
+        "ownerPhotoURL": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "pixelCount": { "type": "number" },
+        "pricePaid": { "type": "number" },
+        "title": { "type": "string" },
+        "note": { "type": "string" },
+        "linkUrl": { "type": "string" },
+        "pixels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "imageUrl": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "ownerId", "ownerUsername", "x", "y", "width", "height", "pixelCount", "pricePaid", "title", "createdAt", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with pixel statistics and bio",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "profileId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "totalPixelsBought": { "type": "number" },
+        "totalSpent": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "bio": { "type": "string" }
+      },
+      "required": ["uid", "username", "profileId", "displayName", "createdAt"]
+    }
+  },
+  "firestore": {
+    "rules": {
+      "plots": {
+        "read": "true",
+        "write": "true"
+      },
+      "users": {
+        "read": "true",
+        "write": "true"
+      }
+    }
+  }
+}

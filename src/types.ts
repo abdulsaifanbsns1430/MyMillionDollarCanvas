@@ -29,6 +29,7 @@ export interface Plot {
   // Encoded pixel data for this plot. Can be a 2D hex array or flat array of '#RRGGBB'
   // Stored as a compact JSON string or flat array
   pixels: string[]; // length = width * height
+  imageUrl?: string; // High-resolution original quality artwork/image data URL (PNG/JPEG/WebP)
   createdAt: number;
   updatedAt: number;
 }

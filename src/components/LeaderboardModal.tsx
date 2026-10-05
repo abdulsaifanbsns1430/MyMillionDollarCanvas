@@ -6,7 +6,6 @@ import {
   ExternalLink,
   Loader2,
   Sparkles,
-  MapPin,
   TrendingUp,
 } from 'lucide-react';
 import { LeaderboardEntry, Plot } from '../types';
@@ -15,13 +14,11 @@ import { getTopLeaderboard } from '../lib/firebase';
 interface LeaderboardModalProps {
   plots: Plot[];
   onClose: () => void;
-  onJumpToProps: (x: number, y: number) => void;
 }
 
 export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   plots,
   onClose,
-  onJumpToProps,
 }) => {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -31,19 +28,6 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
       setIsLoading(true);
       try {
         const remote = await getTopLeaderboard();
-
-        // Calculate plot center coordinates mapping from active plots in memory
-        const plotMap = new Map<string, { x: number; y: number; maxPixels: number }>();
-        plots.forEach((p) => {
-          const current = plotMap.get(p.ownerUsername);
-          if (!current || p.pixelCount > current.maxPixels) {
-            plotMap.set(p.ownerUsername, {
-              x: p.x + p.width / 2,
-              y: p.y + p.height / 2,
-              maxPixels: p.pixelCount,
-            });
-          }
-        });
 
         // Also aggregate local plots if remote is empty or building initial list
         if (remote.length === 0 && plots.length > 0) {
@@ -63,7 +47,6 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                 photoURL: p.ownerPhotoURL,
                 totalPixelsBought: p.pixelCount,
                 totalSpent: p.pricePaid,
-                largestPlotCoords: { x: p.x + p.width / 2, y: p.y + p.height / 2 },
               });
             }
           });
@@ -74,21 +57,13 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
             .map((item, idx) => ({
               ...item,
               rank: idx + 1,
-              largestPlotCoords: plotMap.get(item.username)
-                ? { x: plotMap.get(item.username)!.x, y: plotMap.get(item.username)!.y }
-                : undefined,
             }));
           setEntries(sorted);
         } else {
-          // Enrich remote entries with plot coordinates
-          const enriched = remote.map((entry, idx) => {
-            const coords = plotMap.get(entry.username);
-            return {
-              ...entry,
-              rank: idx + 1,
-              largestPlotCoords: coords ? { x: coords.x, y: coords.y } : undefined,
-            };
-          });
+          const enriched = remote.map((entry, idx) => ({
+            ...entry,
+            rank: idx + 1,
+          }));
           setEntries(enriched);
         }
       } catch (err) {
@@ -118,7 +93,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                 TOP 50 CANVAS TITANS
               </h2>
               <p className="text-xs text-gray-600 font-mono">
-                The biggest landowners of the 4 Million Dollar Canvas.
+                The biggest landowners of the Million Dollar Canvas.
               </p>
             </div>
           </div>
@@ -143,7 +118,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
             </div>
           ) : (
             entries.map((entry, index) => {
-              const dominance = ((entry.totalPixelsBought / 4000000) * 100).toFixed(3);
+              const dominance = ((entry.totalPixelsBought / 1000000) * 100).toFixed(3);
               const isTop1 = entry.rank === 1;
               const isTop2 = entry.rank === 2;
               const isTop3 = entry.rank === 3;
@@ -201,35 +176,18 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
                       </div>
                       <div className="text-[10px] text-gray-600 flex items-center gap-1">
                         <TrendingUp className="w-2.5 h-2.5" />
-                        <span>{dominance}% of 4M Canvas</span>
+                        <span>{dominance}% of Canvas</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Pixel Stats & Jump Button */}
-                  <div className="flex items-center gap-3">
-                    <div className="text-right font-mono">
+                  {/* Pixel Stats */}
+                  <div className="flex items-center gap-2 pr-1">
+                    <div className="text-right font-mono bg-white border border-black px-2.5 py-1 rounded-lg shadow-[1px_1px_0px_#000]">
                       <div className="text-xs font-black text-black">
                         {entry.totalPixelsBought.toLocaleString()} px
                       </div>
-                      <div className="text-[10px] font-bold text-[#10AC84]">
-                        ${entry.totalSpent.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </div>
                     </div>
-
-                    {entry.largestPlotCoords && (
-                      <button
-                        onClick={() => {
-                          onJumpToProps(entry.largestPlotCoords!.x, entry.largestPlotCoords!.y);
-                          onClose();
-                        }}
-                        title="Jump to their territory on the canvas"
-                        className="bg-white hover:bg-yellow-100 active:translate-x-0.5 active:translate-y-0.5 border-[2px] border-black shadow-[2px_2px_0px_#000] p-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-transform"
-                      >
-                        <MapPin className="w-3.5 h-3.5 text-black" />
-                        <span className="hidden sm:inline">Jump</span>
-                      </button>
-                    )}
                   </div>
                 </div>
               );
@@ -239,7 +197,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
 
         {/* Footer */}
         <div className="pt-3 mt-3 border-t-[2px] border-black flex items-center justify-between text-xs font-mono">
-          <span className="text-gray-500 font-bold">1 px = $0.25 | 4 px = $1.00 USD</span>
+          <span className="text-gray-500 font-bold">1 px = $0.50 | 2 px = $1.00 USD</span>
           <button
             onClick={onClose}
             className="bg-black hover:bg-gray-800 text-white border-[2px] border-black shadow-[2px_2px_0px_#000] px-4 py-1.5 rounded-xl font-bold"

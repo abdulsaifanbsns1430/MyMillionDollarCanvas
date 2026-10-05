@@ -41,6 +41,7 @@ interface CanvasEngineProps {
   onSelectionChange: (selection: PixelSelection | null) => void;
   selection: PixelSelection | null;
   draftPixels: Map<string, string>;
+  draftImageUrl?: string | null;
   onPaintPixel: (x: number, y: number, color: string) => void;
   onFillSelection: (color: string) => void;
   hoveredPlotId: string | null;
@@ -61,6 +62,7 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   onSelectionChange,
   selection,
   draftPixels,
+  draftImageUrl,
   onPaintPixel,
   onFillSelection,
   hoveredPlotId,
@@ -70,9 +72,12 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  // In-memory master canvas for 1000x1000 raster
+  // In-memory master canvas for 1000x1000 raster fallback
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const masterCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+
+  // Image cache for high-resolution plot artwork frames (GPU memory cache)
+  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
   // Interaction tracking state
   const isMouseDownRef = useRef(false);
@@ -142,6 +147,9 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
   const draftPixelsRef = useRef(draftPixels);
   draftPixelsRef.current = draftPixels;
+
+  const draftImageUrlRef = useRef(draftImageUrl);
+  draftImageUrlRef.current = draftImageUrl;
 
   // Fast lookup set of selected pixel coordinates
   const selectedPixelSet = useRef<Set<string>>(new Set());
@@ -215,8 +223,6 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         ctx.fillRect(plot.x, plot.y, w, h);
       }
     });
-
-    renderCanvases();
   }, [plots]);
 
   // Coordinate transforms
@@ -331,6 +337,49 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       sheetH
     );
 
+    // 1b. Direct High-Resolution Plot Artwork Frame Rendering (GPU accelerated drawImage)
+    const minWx = Math.max(0, Math.floor(-vp.x / vp.zoom) - 2);
+    const maxWx = Math.min(CANVAS_WIDTH, Math.ceil((width - vp.x) / vp.zoom) + 2);
+    const minWy = Math.max(0, Math.floor(-vp.y / vp.zoom) - 2);
+    const maxWy = Math.min(CANVAS_HEIGHT, Math.ceil((height - vp.y) / vp.zoom) + 2);
+
+    plotsRef.current.forEach((plot) => {
+      // Frustum culling check
+      if (
+        plot.x + plot.width < minWx ||
+        plot.x > maxWx ||
+        plot.y + plot.height < minWy ||
+        plot.y > maxWy
+      ) {
+        return;
+      }
+
+      const pTopLeft = worldToScreen(plot.x, plot.y);
+      const pBotRight = worldToScreen(plot.x + plot.width, plot.y + plot.height);
+      const pw = pBotRight.x - pTopLeft.x;
+      const ph = pBotRight.y - pTopLeft.y;
+
+      if (plot.imageUrl) {
+        const cached = imageCacheRef.current.get(plot.imageUrl);
+        if (cached && cached.complete && cached.naturalWidth > 0) {
+          baseCtx.save();
+          baseCtx.imageSmoothingEnabled = true;
+          baseCtx.imageSmoothingQuality = 'high';
+          baseCtx.drawImage(cached, pTopLeft.x, pTopLeft.y, pw, ph);
+          baseCtx.restore();
+        }
+      }
+
+      // Crisp frame border when zoomed in so frame boundaries are distinct
+      if (vp.zoom >= 3.0) {
+        baseCtx.save();
+        baseCtx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+        baseCtx.lineWidth = 1;
+        baseCtx.strokeRect(pTopLeft.x, pTopLeft.y, pw, ph);
+        baseCtx.restore();
+      }
+    });
+
     // Outer Border
     baseCtx.strokeStyle = '#000000';
     baseCtx.lineWidth = Math.max(2, 2.5 * Math.min(1, vp.zoom));
@@ -395,22 +444,49 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
         overlayCtx.fillRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
       });
 
-      // 2. Render painted draft pixels on top of selection
-      draftPixelsRef.current.forEach((color, key) => {
-        if (!color || color === 'transparent') return;
-        const [pxStr, pyStr] = key.split(',');
-        const px = parseInt(pxStr, 10);
-        const py = parseInt(pyStr, 10);
+      // 2. Render high-res draft image or painted draft pixels on top of selection
+      if (draftImageUrlRef.current) {
+        let minSelX = Infinity;
+        let minY = Infinity;
+        let maxSelX = -Infinity;
+        let maxY = -Infinity;
+        regionsList.forEach((r) => {
+          minSelX = Math.min(minSelX, r.x);
+          minY = Math.min(minY, r.y);
+          maxSelX = Math.max(maxSelX, r.x + r.width);
+          maxY = Math.max(maxY, r.y + r.height);
+        });
 
-        const screenP = worldToScreen(px, py);
-        overlayCtx.fillStyle = color;
-        overlayCtx.fillRect(
-          Math.floor(screenP.x),
-          Math.floor(screenP.y),
-          Math.ceil(vp.zoom),
-          Math.ceil(vp.zoom)
-        );
-      });
+        const draftP0 = worldToScreen(minSelX, minY);
+        const draftP1 = worldToScreen(maxSelX, maxY);
+        const draftW = draftP1.x - draftP0.x;
+        const draftH = draftP1.y - draftP0.y;
+
+        const cachedDraft = imageCacheRef.current.get(draftImageUrlRef.current);
+        if (cachedDraft && cachedDraft.complete && cachedDraft.naturalWidth > 0) {
+          overlayCtx.save();
+          overlayCtx.imageSmoothingEnabled = true;
+          overlayCtx.imageSmoothingQuality = 'high';
+          overlayCtx.drawImage(cachedDraft, draftP0.x, draftP0.y, draftW, draftH);
+          overlayCtx.restore();
+        }
+      } else {
+        draftPixelsRef.current.forEach((color, key) => {
+          if (!color || color === 'transparent') return;
+          const [pxStr, pyStr] = key.split(',');
+          const px = parseInt(pxStr, 10);
+          const py = parseInt(pyStr, 10);
+
+          const screenP = worldToScreen(px, py);
+          overlayCtx.fillStyle = color;
+          overlayCtx.fillRect(
+            Math.floor(screenP.x),
+            Math.floor(screenP.y),
+            Math.ceil(vp.zoom),
+            Math.ceil(vp.zoom)
+          );
+        });
+      }
 
       // 4. High-contrast selection outline (black outer line + bright blue/cyan marching dash)
       const segments = computeSelectionBoundarySegments(regionsList);
@@ -446,8 +522,8 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
     if (curBox && stepRef.current === 'select') {
       const minX = Math.floor(Math.min(curBox.startX, curBox.currentX));
       const minY = Math.floor(Math.min(curBox.startY, curBox.currentY));
-      const maxX = Math.ceil(Math.max(curBox.startX, curBox.currentX));
-      const maxY = Math.ceil(Math.max(curBox.startY, curBox.currentY));
+      const maxX = Math.floor(Math.max(curBox.startX, curBox.currentX)) + 1;
+      const maxY = Math.floor(Math.max(curBox.startY, curBox.currentY)) + 1;
 
       const p0 = worldToScreen(minX, minY);
       const p1 = worldToScreen(maxX, maxY);
@@ -479,7 +555,33 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
 
   useEffect(() => {
     renderCanvases();
-  }, [renderCanvases, viewport, plots, selection, draftPixels, step, selectTool, activeDragBox]);
+  }, [renderCanvases, viewport, plots, selection, draftPixels, draftImageUrl, step, selectTool, activeDragBox]);
+
+  // Preload high-resolution plot images into memory cache
+  useEffect(() => {
+    plots.forEach((plot) => {
+      if (plot.imageUrl && !imageCacheRef.current.has(plot.imageUrl)) {
+        const img = new Image();
+        img.onload = () => {
+          imageCacheRef.current.set(plot.imageUrl!, img);
+          renderCanvases();
+        };
+        img.src = plot.imageUrl;
+      }
+    });
+  }, [plots, renderCanvases]);
+
+  // Preload draft high-res image
+  useEffect(() => {
+    if (draftImageUrl && !imageCacheRef.current.has(draftImageUrl)) {
+      const img = new Image();
+      img.onload = () => {
+        imageCacheRef.current.set(draftImageUrl, img);
+        renderCanvases();
+      };
+      img.src = draftImageUrl;
+    }
+  }, [draftImageUrl, renderCanvases]);
 
   // Spacebar panning hotkey
   useEffect(() => {
@@ -1271,9 +1373,26 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
       )}
 
       {/* Touch & Desktop Floating Zoom Controls (Top Right) */}
-      <div className="absolute top-4 right-4 flex flex-col gap-1.5 z-20 select-none">
+      <div
+        className="absolute top-4 right-4 flex flex-col gap-1.5 z-20 select-none"
+        onMouseDown={(e) => e.stopPropagation()}
+        onMouseMove={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
         <button
-          onClick={handleZoomIn}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleZoomIn();
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
           title="Zoom In"
           aria-label="Zoom In"
           className="w-10 h-10 rounded-xl bg-white hover:bg-gray-50 active:bg-[#FFE169] border-[2.5px] border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center text-black font-black transition-transform"
@@ -1281,7 +1400,14 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
           <ZoomIn className="w-5 h-5 text-black" />
         </button>
         <button
-          onClick={handleZoomOut}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleZoomOut();
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
           title="Zoom Out"
           aria-label="Zoom Out"
           className="w-10 h-10 rounded-xl bg-white hover:bg-gray-50 active:bg-[#FFE169] border-[2.5px] border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center text-black font-black transition-transform"
@@ -1289,7 +1415,14 @@ export const CanvasEngine: React.FC<CanvasEngineProps> = ({
           <ZoomOut className="w-5 h-5 text-black" />
         </button>
         <button
-          onClick={handleCenterCanvas}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleCenterCanvas();
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
           title="Fit Canvas"
           aria-label="Fit Canvas"
           className="w-10 h-10 rounded-xl bg-[#FFE169] hover:bg-yellow-300 active:bg-yellow-400 border-[2.5px] border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center text-black font-black transition-transform"
